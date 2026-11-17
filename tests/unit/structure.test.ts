@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { existsSync } from 'fs'
 import { join } from 'path'
 
@@ -15,10 +15,6 @@ describe('Fase 0: Estructura de carpetas', () => {
     'tests/integration',
     'tests/e2e',
   ]
-
-  beforeEach(() => {
-    // No setup needed - just check directories exist
-  })
 
   requiredDirs.forEach((dir) => {
     it(`debe existir la carpeta ${dir}`, () => {
