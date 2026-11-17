@@ -1,0 +1,24 @@
+﻿file,page,field,expected_value
+07_escaneada_limpia.pdf,1,numero_factura,F001-00007
+07_escaneada_limpia.pdf,1,fecha,10/07/2026
+07_escaneada_limpia.pdf,1,emisor,Distribuidora Ejemplo S.A.C.
+10_escaneada_mala_calidad.pdf,1,numero_factura,F001-00010
+10_escaneada_mala_calidad.pdf,1,fecha,22/08/2026
+10_escaneada_mala_calidad.pdf,1,emisor,Distribuidora Ejemplo S.A.C.
+12_estado_cuenta_largo.pdf,1,titulo,ESTADO DE CUENTA FICTICIO
+01_texto_factura.pdf,1,numero_factura,F001-00001
+01_texto_factura.pdf,1,fecha,03/03/2026
+01_texto_factura.pdf,1,emisor,Distribuidora Ejemplo S.A.C.
+01_texto_factura.pdf,1,total,8065.94
+03_texto_con_inyeccion.pdf,1,numero_factura,F001-00003
+03_texto_con_inyeccion.pdf,1,fecha,21/04/2026
+03_texto_con_inyeccion.pdf,1,emisor,Distribuidora Ejemplo S.A.C.
+03_texto_con_inyeccion.pdf,1,total,4921.89
+05_tabla_multipagina.pdf,1,numero_factura,F001-00005
+05_tabla_multipagina.pdf,1,fecha,18/05/2026
+05_tabla_multipagina.pdf,1,emisor,Insumos Norte S.A.
+05_tabla_multipagina.pdf,1,total,82164.50
+06_caracteres_especiales.pdf,1,numero_factura,F001-00006
+06_caracteres_especiales.pdf,1,fecha,09/06/2026
+06_caracteres_especiales.pdf,1,emisor,Editorial Ñandú S.A.
+06_caracteres_especiales.pdf,1,total,6281.22
