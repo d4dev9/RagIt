@@ -12,8 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12
       - run: pnpm install
       - run: pnpm lint
 
@@ -22,8 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12
       - run: pnpm exec tsc --noEmit
 
   test:
@@ -31,7 +27,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 12
       - run: pnpm install
       - run: pnpm test
