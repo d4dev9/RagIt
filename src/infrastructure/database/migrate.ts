@@ -43,7 +43,7 @@ export async function runMigrations(options: MigrationOptions): Promise<void> {
       try {
         await client.query(sql)
         await client.query(
-          'INSERT INTO schema_migrations (version) VALUES ($1)',
+          `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING`,
           [file]
         )
         await client.query('COMMIT')
