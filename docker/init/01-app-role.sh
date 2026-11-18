@@ -1,0 +1,10 @@
+set -e
+psql -v ON_ERROR_STOP=1 -v app_password="$POSTGRES_APP_PASSWORD" --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
+SELECT format('CREATE ROLE ragit_app LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT', :'app_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ragit_app') \gexec
+ALTER ROLE ragit_app PASSWORD :'app_password';
+REVOKE ALL ON DATABASE ragit FROM PUBLIC;
+GRANT CONNECT ON DATABASE ragit TO ragit_app;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO ragit_app;
+SQL

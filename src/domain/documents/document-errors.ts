@@ -60,3 +60,31 @@ export class InvalidDocumentTransitionError extends Error {
     this.name = 'InvalidDocumentTransitionError'
   }
 }
+
+export class InvalidDocumentIdError extends Error {
+  constructor() {
+    super('Invalid document id')
+    this.name = 'InvalidDocumentIdError'
+  }
+}
+
+export class InvalidChunkIdError extends Error {
+  constructor() {
+    super('Invalid chunk id')
+    this.name = 'InvalidChunkIdError'
+  }
+}
+
+export class InvalidEmbeddingError extends Error {
+  constructor() {
+    super('Invalid embedding vector')
+    this.name = 'InvalidEmbeddingError'
+  }
+}
+
+export class InvalidChunkLimitError extends Error {
+  constructor() {
+    super('Chunk search limit must be a positive integer')
+    this.name = 'InvalidChunkLimitError'
+  }
+}

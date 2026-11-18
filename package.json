@@ -7,7 +7,9 @@
     "lint": "eslint .",
     "check": "tsc --noEmit",
     "build": "next build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run tests/integration",
+    "db:migrate": "tsx scripts/migrate.ts"
   },
   "keywords": [],
   "author": "",
@@ -34,6 +36,7 @@
     "@eslint/js": "^9.39.5",
     "@tailwindcss/postcss": "^4.3.5",
     "@types/node": "22.13.3",
+    "@types/pg": "^8.23.1",
     "@types/react": "19.0.0",
     "@types/react-dom": "19.0.0",
     "@vitest/coverage-v8": "5.1.0",
@@ -41,12 +44,14 @@
     "postcss": "^8.5.33",
     "prettier": "^3.10.1",
     "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
     "typescript": "5.5.3",
     "typescript-eslint": "^8.72.2",
     "vitest": "^5.1.0"
   },
   "dependencies": {
     "next": "^16.4.6",
+    "pg": "^8.23.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   }
