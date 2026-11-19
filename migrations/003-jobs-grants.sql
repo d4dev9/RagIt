@@ -1,0 +1,1 @@
+GRANT SELECT, INSERT, UPDATE ON jobs TO ragit_app;

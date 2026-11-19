@@ -1,5 +1,6 @@
-import type { Pool } from 'pg'
+import type { Pool, PoolClient } from 'pg'
 import { DocumentId } from '../../domain/documents/document-id'
+import { InvalidDocumentCountError } from '../../domain/documents/document-errors'
 import { DocumentState } from '../../domain/documents/document-status'
 import type { DocumentStatus } from '../../domain/documents/document-status'
 import type { SessionId } from '../../domain/sessions/session-id'
@@ -28,39 +29,93 @@ function toRecord(row: DocumentRow): DocumentRecord {
   }
 }
 
+type Queryable = Pool | PoolClient
+
+async function insertDocument(
+  queryable: Queryable,
+  sessionId: SessionId,
+  document: DocumentRecord
+): Promise<void> {
+  await queryable.query(
+    `
+      INSERT INTO documents (
+        id,
+        session_id,
+        status,
+        size_bytes,
+        page_count,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (id) DO UPDATE
+      SET status = EXCLUDED.status,
+          size_bytes = EXCLUDED.size_bytes,
+          page_count = EXCLUDED.page_count,
+          updated_at = EXCLUDED.updated_at
+      WHERE documents.session_id = EXCLUDED.session_id
+    `,
+    [
+      document.id.toString(),
+      sessionId.toString(),
+      document.status,
+      document.sizeBytes,
+      document.pageCount,
+      document.createdAt,
+      document.updatedAt,
+    ]
+  )
+}
+
 export class PostgresDocumentRepository implements DocumentRepository {
   constructor(private readonly pool: Pool) {}
 
   async save(sessionId: SessionId, document: DocumentRecord): Promise<void> {
-    await this.pool.query(
-      `
-        INSERT INTO documents (
-          id,
-          session_id,
-          status,
-          size_bytes,
-          page_count,
-          created_at,
-          updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (id) DO UPDATE
-        SET status = EXCLUDED.status,
-            size_bytes = EXCLUDED.size_bytes,
-            page_count = EXCLUDED.page_count,
-            updated_at = EXCLUDED.updated_at
-        WHERE documents.session_id = EXCLUDED.session_id
-      `,
-      [
-        document.id.toString(),
+    await insertDocument(this.pool, sessionId, document)
+  }
+
+  async saveIfBelowQuota(
+    sessionId: SessionId,
+    document: DocumentRecord,
+    maxDocuments: number
+  ): Promise<boolean> {
+    if (!Number.isInteger(maxDocuments) || maxDocuments < 1) {
+      throw new InvalidDocumentCountError()
+    }
+
+    const client = await this.pool.connect()
+
+    try {
+      await client.query('BEGIN')
+      await client.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [
         sessionId.toString(),
-        document.status,
-        document.sizeBytes,
-        document.pageCount,
-        document.createdAt,
-        document.updatedAt,
-      ]
-    )
+      ])
+      const result = await client.query<{ count: number }>(
+        `
+          SELECT COUNT(*)::int AS count
+          FROM documents
+          WHERE session_id = $1
+        `,
+        [sessionId.toString()]
+      )
+      const current = result.rows[0]?.count ?? 0
+
+      if (current >= maxDocuments) {
+        await client.query('ROLLBACK')
+
+        return false
+      }
+
+      await insertDocument(client, sessionId, document)
+      await client.query('COMMIT')
+
+      return true
+    } catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    } finally {
+      client.release()
+    }
   }
 
   async findById(

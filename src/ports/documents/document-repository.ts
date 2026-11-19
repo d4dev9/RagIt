@@ -13,6 +13,11 @@ export interface DocumentRecord {
 
 export interface DocumentRepository {
   save(sessionId: SessionId, document: DocumentRecord): Promise<void>
+  saveIfBelowQuota(
+    sessionId: SessionId,
+    document: DocumentRecord,
+    maxDocuments: number
+  ): Promise<boolean>
   findById(
     sessionId: SessionId,
     documentId: DocumentId
