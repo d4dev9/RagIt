@@ -1,3 +1,6 @@
-export default function Home() {
-  return <main className="min-h-screen p-4">RagIt</main>
+import { RagItWorkspace } from '../components/ragit-workspace'
+import type { JSX } from 'react'
+
+export default function Home(): JSX.Element {
+  return <RagItWorkspace />
 }
