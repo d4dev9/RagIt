@@ -1,15 +1,16 @@
 {
   "name": "RagIt",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Demo RAG para analizar PDFs con citas por página y aislamiento por sesión",
   "scripts": {
     "lint": "eslint .",
     "check": "tsc --noEmit",
     "build": "next build",
     "test": "vitest run",
-    "test:integration": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run tests/integration",
-    "db:migrate": "tsx scripts/migrate.ts"
+    "test:integration": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run tests/integration --no-file-parallelism",
+    "verify": "pnpm lint && pnpm check && pnpm test && pnpm build",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
+    "worker:ingest": "node --env-file-if-exists=.env --import tsx scripts/ingest-worker.ts"
   },
   "keywords": [],
   "author": "",
@@ -18,20 +19,11 @@
     "packageManager": {
       "name": "pnpm",
       "version": "12.21.0",
-      "onFail": "download"
+      "onFail": "download"  
     }
   },
   "packageManager": "pnpm@12.21.0",
   "type": "module",
-  "browserslist": {
-    "production": false,
-    "development": [
-      "last 2 Chrome versions",
-      "last 2 Firefox versions",
-      "last 2 Edge versions",
-      "last 2 Safari versions"
-    ]
-  },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@tailwindcss/postcss": "^4.3.5",

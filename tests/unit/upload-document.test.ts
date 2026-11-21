@@ -1,229 +1,117 @@
 import { randomUUID } from 'node:crypto'
+import { Buffer } from 'node:buffer'
 import { describe, expect, it } from 'vitest'
 import { uploadDocument } from '../../src/application/upload-document'
 import {
   DocumentQuotaExceededError,
   InvalidPdfSignatureError,
+  PdfTooLargeError,
 } from '../../src/domain/documents/document-errors'
-import { DocumentId } from '../../src/domain/documents/document-id'
-import { MAX_DOCUMENTS_PER_SESSION } from '../../src/domain/documents/document-limits'
+import { MAX_DOCUMENTS_PER_SESSION, MAX_PDF_SIZE_BYTES } from '../../src/domain/documents/document-limits'
 import { SessionId } from '../../src/domain/sessions/session-id'
-import type { DocumentRecord } from '../../src/ports/documents/document-repository'
-import type { DocumentRepository } from '../../src/ports/documents/document-repository'
-import type { Job, JobQueue } from '../../src/ports/job-queue'
+import {
+  fixture,
+  MemoryDocumentRepository,
+  MemoryJobQueue,
+  MemoryPdfFileStore,
+  newDocumentRecord,
+} from './support/fakes'
 
-const PDF_BYTES = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF')
+function deps(overrides: Partial<{ jobQueue: MemoryJobQueue; files: MemoryPdfFileStore }> = {}) {
+  const documents = new MemoryDocumentRepository()
+  const jobQueue = overrides.jobQueue ?? new MemoryJobQueue()
+  const files = overrides.files ?? new MemoryPdfFileStore()
 
-class InMemoryDocumentRepository implements DocumentRepository {
-  readonly documents = new Map<string, DocumentRecord>()
-  private readonly sessionHints = new Map<string, string>()
-
-  async save(sessionId: SessionId, document: DocumentRecord): Promise<void> {
-    this.documents.set(document.id.toString(), document)
-    this.sessionHints.set(document.id.toString(), sessionId.toString())
-  }
-
-  async saveIfBelowQuota(
-    sessionId: SessionId,
-    document: DocumentRecord,
-    maxDocuments: number
-  ): Promise<boolean> {
-    const current = await this.countBySession(sessionId)
-
-    if (current >= maxDocuments) {
-      return false
-    }
-
-    await this.save(sessionId, document)
-
-    return true
-  }
-
-  async findById(
-    sessionId: SessionId,
-    documentId: DocumentId
-  ): Promise<DocumentRecord | null> {
-    if (this.sessionHints.get(documentId.toString()) !== sessionId.toString()) {
-      return null
-    }
-
-    return this.documents.get(documentId.toString()) ?? null
-  }
-
-  async listBySession(
-    sessionId: SessionId
-  ): Promise<readonly DocumentRecord[]> {
-    return [...this.documents.values()].filter(
-      (document) =>
-        this.sessionHints.get(document.id.toString()) === sessionId.toString()
-    )
-  }
-
-  async updateStatus(
-    _sessionId: SessionId,
-    documentId: DocumentId,
-    status: DocumentRecord['status'],
-    updatedAt: Date
-  ): Promise<boolean> {
-    const existing = this.documents.get(documentId.toString())
-
-    if (!existing) {
-      return false
-    }
-
-    this.documents.set(documentId.toString(), {
-      ...existing,
-      status,
-      updatedAt,
-    })
-
-    return true
-  }
-
-  async countBySession(sessionId: SessionId): Promise<number> {
-    const documents = await this.listBySession(sessionId)
-
-    return documents.length
-  }
-
-  async delete(sessionId: SessionId, documentId: DocumentId): Promise<boolean> {
-    const existing = await this.findById(sessionId, documentId)
-
-    if (!existing) {
-      return false
-    }
-
-    this.documents.delete(documentId.toString())
-    this.sessionHints.delete(documentId.toString())
-
-    return true
-  }
-
-  seed(sessionId: SessionId, count: number): void {
-    for (let index = 0; index < count; index += 1) {
-      const document: DocumentRecord = {
-        id: DocumentId.create(randomUUID()),
-        status: 'pending',
-        sizeBytes: PDF_BYTES.byteLength,
-        pageCount: 0,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }
-
-      this.documents.set(document.id.toString(), document)
-      this.sessionHints.set(document.id.toString(), sessionId.toString())
-    }
-  }
+  return { documents, jobQueue, files, deps: { documentRepository: documents, jobQueue, pdfFileStore: files } }
 }
 
-class RecordingJobQueue implements JobQueue {
-  readonly submitted: Array<{
-    readonly documentId: string
-    readonly sessionId: string
-    readonly pdfBytes: Buffer
-    readonly pdfOriginalName: string
-  }> = []
-  shouldFail = false
+describe('uploadDocument (F-02, F-08)', () => {
+  it('rechaza bytes que no tienen firma PDF y no guarda nada', async () => {
+    const { documents, files, deps: d } = deps()
+    const sessionId = SessionId.create(randomUUID())
 
-  async submitIngestJob(
-    documentId: string,
-    sessionId: string,
-    pdfBytes: Buffer,
-    pdfOriginalName: string
-  ): Promise<Job> {
-    if (this.shouldFail) {
-      throw new Error('job queue unavailable')
+    await expect(
+      uploadDocument(sessionId, Buffer.from('<html>no</html>'), d)
+    ).rejects.toBeInstanceOf(InvalidPdfSignatureError)
+
+    expect(files.files.size).toBe(0)
+    expect(await documents.countBySession(sessionId)).toBe(0)
+  })
+
+  it('rechaza un PDF mayor de 5 MB', async () => {
+    const { deps: d } = deps()
+    const oversized = Buffer.concat([
+      Buffer.from('%PDF-1.4\n'),
+      Buffer.alloc(MAX_PDF_SIZE_BYTES),
+    ])
+
+    await expect(
+      uploadDocument(SessionId.create(randomUUID()), oversized, d)
+    ).rejects.toBeInstanceOf(PdfTooLargeError)
+  })
+
+  it('rechaza la subida número seis de una sesión', async () => {
+    const { documents, deps: d } = deps()
+    const sessionId = SessionId.create(randomUUID())
+
+    for (let i = 0; i < MAX_DOCUMENTS_PER_SESSION; i += 1) {
+      await documents.save(sessionId, newDocumentRecord())
     }
 
-    this.submitted.push({ documentId, sessionId, pdfBytes, pdfOriginalName })
+    await expect(
+      uploadDocument(sessionId, fixture('01_texto_factura.pdf'), d)
+    ).rejects.toBeInstanceOf(DocumentQuotaExceededError)
+  })
 
-    return {
-      id: randomUUID(),
-      type: 'ingest_document',
-      payload: {},
-      status: 'pending',
-      attempts: 0,
-      createdAt: new Date(),
+  it('guarda el PDF y encola un trabajo que apunta al archivo guardado', async () => {
+    const { documents, files, jobQueue, deps: d } = deps()
+    const sessionId = SessionId.create(randomUUID())
+    const pdf = fixture('01_texto_factura.pdf')
+
+    const output = await uploadDocument(sessionId, pdf, d)
+
+    expect(output.documentStatus).toBe('pending')
+    expect(documents.statusOf(output.documentId)).toBe('pending')
+    expect(jobQueue.submitted).toHaveLength(1)
+
+    const [payload] = jobQueue.submitted
+    expect(payload?.documentId).toBe(output.documentId)
+    expect(payload?.pdfByteLength).toBe(pdf.byteLength)
+    expect(payload?.storagePath).toMatch(/^[0-9a-f-]{36}\.pdf$/)
+    expect(files.files.has(payload?.storagePath ?? '')).toBe(true)
+    expect(JSON.stringify(payload)).not.toContain('pdfBase64')
+  })
+
+  it('si el encolado falla, borra el archivo y marca el documento como failed', async () => {
+    const jobQueue = new MemoryJobQueue()
+    jobQueue.submitIngestJob = async () => {
+      throw new Error('cola caída')
     }
-  }
-
-  async getJob(): Promise<Job | null> {
-    return null
-  }
-
-  async claimNextJob(): Promise<Job | null> {
-    return null
-  }
-
-  async markReady(): Promise<void> {}
-
-  async markFailed(): Promise<void> {}
-}
-
-function newSessionId(): SessionId {
-  return SessionId.create(randomUUID())
-}
-
-describe('uploadDocument (F-02, F-04)', () => {
-  it('guarda el documento pendiente y encola el PDF real', async () => {
-    const repository = new InMemoryDocumentRepository()
-    const queue = new RecordingJobQueue()
-    const sessionId = newSessionId()
-    const result = await uploadDocument(
-      sessionId,
-      PDF_BYTES,
-      repository,
-      queue,
-      'factura.pdf'
-    )
-    const stored = await repository.findById(
-      sessionId,
-      DocumentId.create(result.documentId)
-    )
-
-    expect(stored?.status).toBe('pending')
-    expect(stored?.pageCount).toBe(0)
-    expect(result.documentStatus).toBe('pending')
-    expect(queue.submitted).toHaveLength(1)
-    expect(queue.submitted[0]?.pdfBytes.equals(PDF_BYTES)).toBe(true)
-    expect(queue.submitted[0]?.pdfOriginalName).toBe('factura.pdf')
-  })
-
-  it('rechaza la subida cuando la sesión alcanza la cuota del dominio', async () => {
-    const repository = new InMemoryDocumentRepository()
-    const queue = new RecordingJobQueue()
-    const sessionId = newSessionId()
-    repository.seed(sessionId, MAX_DOCUMENTS_PER_SESSION)
+    const { documents, files, deps: d } = deps({ jobQueue })
+    const sessionId = SessionId.create(randomUUID())
 
     await expect(
-      uploadDocument(sessionId, PDF_BYTES, repository, queue)
-    ).rejects.toThrow(DocumentQuotaExceededError)
-    expect(queue.submitted).toHaveLength(0)
+      uploadDocument(sessionId, fixture('01_texto_factura.pdf'), d)
+    ).rejects.toThrow('cola caída')
+
+    expect(files.files.size).toBe(0)
+    const [only] = await documents.listBySession(sessionId)
+    expect(only?.status).toBe('failed')
   })
 
-  it('elimina el documento si el encolado falla', async () => {
-    const repository = new InMemoryDocumentRepository()
-    const queue = new RecordingJobQueue()
-    const sessionId = newSessionId()
-    queue.shouldFail = true
+  it('si el almacenamiento falla, no encola nada y marca el documento como failed', async () => {
+    const { documents, jobQueue, deps: d } = deps()
+    d.pdfFileStore.save = async () => {
+      throw new Error('disco lleno')
+    }
+    const sessionId = SessionId.create(randomUUID())
 
     await expect(
-      uploadDocument(sessionId, PDF_BYTES, repository, queue)
-    ).rejects.toThrow('job queue unavailable')
-    expect(await repository.countBySession(sessionId)).toBe(0)
-  })
+      uploadDocument(sessionId, fixture('01_texto_factura.pdf'), d)
+    ).rejects.toThrow('disco lleno')
 
-  it('rechaza un archivo sin firma PDF', async () => {
-    const repository = new InMemoryDocumentRepository()
-    const queue = new RecordingJobQueue()
-
-    await expect(
-      uploadDocument(
-        newSessionId(),
-        Buffer.from('no es un pdf'),
-        repository,
-        queue
-      )
-    ).rejects.toThrow(InvalidPdfSignatureError)
+    expect(jobQueue.submitted).toHaveLength(0)
+    const [only] = await documents.listBySession(sessionId)
+    expect(only?.status).toBe('failed')
   })
 })

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { Buffer } from 'node:buffer'
 import { DocumentId } from '../domain/documents/document-id'
 import { DocumentState } from '../domain/documents/document-status'
 import type { DocumentStatus } from '../domain/documents/document-status'
@@ -10,13 +11,17 @@ import {
 import { DocumentQuotaExceededError } from '../domain/documents/document-errors'
 import { assertPdfSignature } from '../domain/documents/pdf-signature'
 import type { SessionId } from '../domain/sessions/session-id'
-import type { DocumentRecord } from '../ports/documents/document-repository'
-import type { DocumentRepository } from '../ports/documents/document-repository'
+import type {
+  DocumentRecord,
+  DocumentRepository,
+} from '../ports/documents/document-repository'
 import type { JobQueue } from '../ports/job-queue'
+import type { PdfFileStore } from '../ports/pdf-file-store'
 
-export interface UploadDocumentInput {
-  readonly pdfBytes: Buffer
-  readonly pdfOriginalName?: string
+export interface UploadDependencies {
+  readonly documentRepository: DocumentRepository
+  readonly jobQueue: JobQueue
+  readonly pdfFileStore: PdfFileStore
 }
 
 export interface UploadDocumentOutput {
@@ -28,22 +33,17 @@ export interface UploadDocumentOutput {
 export async function uploadDocument(
   sessionId: SessionId,
   pdfBytes: Buffer,
-  documentRepository: DocumentRepository,
-  jobQueue: JobQueue,
-  pdfOriginalName?: string
+  deps: UploadDependencies
 ): Promise<UploadDocumentOutput> {
-  const pdfUint8 = new Uint8Array(pdfBytes)
+  const content = new Uint8Array(pdfBytes)
 
-  assertPdfSignature(pdfUint8)
-  assertPdfSize(pdfUint8)
-
-  const currentCount = await documentRepository.countBySession(sessionId)
-
-  assertDocumentQuota(currentCount)
+  assertPdfSignature(content)
+  assertPdfSize(content)
+  assertDocumentQuota(await deps.documentRepository.countBySession(sessionId))
 
   const documentId = DocumentId.create(randomUUID())
   const now = new Date()
-  const documentRecord: DocumentRecord = {
+  const record: DocumentRecord = {
     id: documentId,
     status: DocumentState.pending().status,
     sizeBytes: pdfBytes.byteLength,
@@ -51,9 +51,10 @@ export async function uploadDocument(
     createdAt: now,
     updatedAt: now,
   }
-  const stored = await documentRepository.saveIfBelowQuota(
+
+  const stored = await deps.documentRepository.saveIfBelowQuota(
     sessionId,
-    documentRecord,
+    record,
     MAX_DOCUMENTS_PER_SESSION
   )
 
@@ -61,21 +62,41 @@ export async function uploadDocument(
     throw new DocumentQuotaExceededError()
   }
 
+  let storagePath: string
+
   try {
-    const job = await jobQueue.submitIngestJob(
-      documentId.toString(),
-      sessionId.toString(),
-      pdfBytes,
-      pdfOriginalName ?? ''
-    )
+    storagePath = await deps.pdfFileStore.save(pdfBytes)
+  } catch (error) {
+    await markFailed(deps.documentRepository, sessionId, documentId)
+    throw error
+  }
+
+  try {
+    const job = await deps.jobQueue.submitIngestJob({
+      documentId: documentId.toString(),
+      sessionId: sessionId.toString(),
+      storagePath,
+      pdfByteLength: pdfBytes.byteLength,
+    })
 
     return {
       documentId: documentId.toString(),
       jobId: job.id,
-      documentStatus: documentRecord.status,
+      documentStatus: record.status,
     }
   } catch (error) {
-    await documentRepository.delete(sessionId, documentId)
+    await deps.pdfFileStore.remove(storagePath)
+    await markFailed(deps.documentRepository, sessionId, documentId)
     throw error
   }
+}
+
+async function markFailed(
+  documentRepository: DocumentRepository,
+  sessionId: SessionId,
+  documentId: DocumentId
+): Promise<void> {
+  const failed = DocumentState.pending().transitionTo('failed').status
+
+  await documentRepository.updateStatus(sessionId, documentId, failed, new Date())
 }

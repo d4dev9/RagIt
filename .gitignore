@@ -1,20 +1,12 @@
-# dependencias
-node_modules/
-
-# build de Next.js
-.next/
-out/
-
-# variables de entorno (.env.example sí se versiona)
-.env
-.env*.local
-
-# TypeScript y pruebas
 *.tsbuildinfo
 coverage/
+.next/
+node_modules/
+dist/
+.env
+.data/
 
 # sistema
 .DS_Store
 Thumbs.db
 *.log
-dist/

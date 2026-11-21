@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import type { Pool } from 'pg'
-import type { Job, JobQueue, JobStatus } from '../../ports/job-queue'
+import type {
+  IngestDocumentJobPayload,
+  Job,
+  JobQueue,
+  JobStatus,
+} from '../../ports/job-queue'
 import { INGEST_DOCUMENT_JOB_TYPE } from '../../ports/job-queue'
 
 type JobRow = {
@@ -22,9 +27,7 @@ function toRecord(value: unknown): Record<string, unknown> {
   }
 
   if (typeof value === 'string') {
-    const parsed: unknown = JSON.parse(value)
-
-    return toRecord(parsed)
+    return toRecord(JSON.parse(value) as unknown)
   }
 
   return {}
@@ -61,43 +64,30 @@ const JOB_COLUMNS = `
 export class PostgresJobQueue implements JobQueue {
   constructor(private readonly pool: Pool) {}
 
-  private query(
-    text: string,
-    values: readonly unknown[]
-  ): Promise<{ rows: JobRow[] }> {
-    return this.pool.query<JobRow>(text, [...values])
-  }
-
-  private async nextJob(
-    text: string,
-    values: readonly unknown[]
-  ): Promise<Job | null> {
-    const { rows } = await this.query(text, values)
-    const row = rows[0]
+  private async firstJob(text: string, values: readonly unknown[]): Promise<Job | null> {
+    const result = await this.pool.query<JobRow>(text, [...values])
+    const row = result.rows[0]
 
     return row ? toJob(row) : null
   }
 
-  async submitIngestJob(
-    documentId: string,
-    sessionId: string,
-    pdfBytes: Buffer,
-    pdfOriginalName: string
-  ): Promise<Job> {
-    const payload = JSON.stringify({
-      documentId,
-      sessionId,
-      pdfOriginalName,
-      pdfByteLength: pdfBytes.byteLength,
-      pdfBase64: pdfBytes.toString('base64'),
-    })
-    const result = await this.query(
+  async submitIngestJob(payload: IngestDocumentJobPayload): Promise<Job> {
+    const result = await this.pool.query<JobRow>(
       `
         INSERT INTO jobs (id, type, payload, status, created_at)
         VALUES ($1, $2, $3::jsonb, 'pending', now())
         RETURNING ${JOB_COLUMNS}
       `,
-      [randomUUID(), INGEST_DOCUMENT_JOB_TYPE, payload]
+      [
+        randomUUID(),
+        INGEST_DOCUMENT_JOB_TYPE,
+        JSON.stringify({
+          documentId: payload.documentId,
+          sessionId: payload.sessionId,
+          storagePath: payload.storagePath,
+          pdfByteLength: payload.pdfByteLength,
+        }),
+      ]
     )
     const row = result.rows[0]
 
@@ -109,18 +99,11 @@ export class PostgresJobQueue implements JobQueue {
   }
 
   async getJob(id: string): Promise<Job | null> {
-    return this.nextJob(
-      `
-        SELECT ${JOB_COLUMNS}
-        FROM jobs
-        WHERE id = $1
-      `,
-      [id]
-    )
+    return this.firstJob(`SELECT ${JOB_COLUMNS} FROM jobs WHERE id = $1`, [id])
   }
 
   async claimNextJob(): Promise<Job | null> {
-    return this.nextJob(
+    return this.firstJob(
       `
         WITH claimed AS (
           SELECT id
@@ -143,7 +126,7 @@ export class PostgresJobQueue implements JobQueue {
   }
 
   async markReady(id: string, result: Record<string, unknown>): Promise<void> {
-    await this.query(
+    await this.pool.query(
       `
         UPDATE jobs
         SET status = 'ready', completed_at = now(), result = $2::jsonb
@@ -154,7 +137,7 @@ export class PostgresJobQueue implements JobQueue {
   }
 
   async markFailed(id: string, error: string): Promise<void> {
-    await this.query(
+    await this.pool.query(
       `
         UPDATE jobs
         SET status = 'failed', completed_at = now(), error = $2

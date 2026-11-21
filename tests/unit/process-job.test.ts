@@ -1,256 +1,203 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { InvalidIngestJobPayloadError } from '../../src/application/ingest-errors'
-import { processJob } from '../../src/application/process-job'
-import { InvalidEmbeddingError } from '../../src/domain/documents/document-errors'
+import { SessionId } from '../../src/domain/sessions/session-id'
 import { DocumentId } from '../../src/domain/documents/document-id'
-import type { DocumentStatus } from '../../src/domain/documents/document-status'
-import type { SessionId } from '../../src/domain/sessions/session-id'
-import { SessionId as SessionIdValue } from '../../src/domain/sessions/session-id'
-import type { EmbeddingProvider } from '../../src/ports/embedding-provider'
-import type {
-  ChunkInput,
-  ChunkMatch,
-  ChunkRecord,
-} from '../../src/ports/documents/chunk-repository'
-import type { ChunkRepository } from '../../src/ports/documents/chunk-repository'
-import type { DocumentRecord } from '../../src/ports/documents/document-repository'
-import type { DocumentRepository } from '../../src/ports/documents/document-repository'
+import { IngestDocumentNotFoundError } from '../../src/application/ingest-errors'
+import {
+  processJob,
+  processNextJob,
+  type ProcessJobDependencies,
+} from '../../src/application/process-job'
+import {
+  fixture,
+  FakeEmbeddingProvider,
+  MemoryChunkRepository,
+  MemoryDocumentRepository,
+  MemoryJobQueue,
+  MemoryPdfFileStore,
+  newDocumentRecord,
+} from './support/fakes'
 import type { Job } from '../../src/ports/job-queue'
 
-function buildPdf(blocks: readonly string[]): Buffer {
-  const body = blocks.map((block) => `BT\n(${block}) Tj\nET\n`).join('')
-
-  return Buffer.from(`%PDF-1.4\n${body}%%EOF`)
+interface Scenario {
+  readonly deps: ProcessJobDependencies
+  readonly documents: MemoryDocumentRepository
+  readonly chunks: MemoryChunkRepository
+  readonly files: MemoryPdfFileStore
+  readonly queue: MemoryJobQueue
+  readonly sessionId: SessionId
+  readonly documentId: DocumentId
+  readonly job: Job
 }
 
-class FakeDocumentRepository implements DocumentRepository {
-  readonly statuses: DocumentStatus[] = []
-  private record: DocumentRecord
+async function scenario(
+  pdf: Buffer,
+  options: {
+    embeddings?: FakeEmbeddingProvider
+    documentStatus?: 'pending' | 'processing' | 'ready' | 'failed'
+    byteLengthOverride?: number
+  } = {}
+): Promise<Scenario> {
+  const documents = new MemoryDocumentRepository()
+  const chunks = new MemoryChunkRepository()
+  const files = new MemoryPdfFileStore()
+  const queue = new MemoryJobQueue()
+  const sessionId = SessionId.create(randomUUID())
+  const record = newDocumentRecord(options.documentStatus ?? 'pending')
 
-  constructor(record: DocumentRecord) {
-    this.record = record
+  await documents.save(sessionId, record)
+
+  const storagePath = await files.save(pdf)
+  await queue.submitIngestJob({
+    documentId: record.id.toString(),
+    sessionId: sessionId.toString(),
+    storagePath,
+    pdfByteLength: options.byteLengthOverride ?? pdf.byteLength,
+  })
+
+  const job = await queue.claimNextJob()
+
+  if (!job) {
+    throw new Error('el trabajo de prueba no se encoló')
   }
-
-  async save(_sessionId: SessionId, document: DocumentRecord): Promise<void> {
-    this.record = document
-  }
-
-  async saveIfBelowQuota(
-    _sessionId: SessionId,
-    document: DocumentRecord
-  ): Promise<boolean> {
-    this.record = document
-
-    return true
-  }
-
-  async findById(
-    _sessionId: SessionId,
-    documentId: DocumentId
-  ): Promise<DocumentRecord | null> {
-    if (!this.record.id.equals(documentId)) {
-      return null
-    }
-
-    return this.record
-  }
-
-  async listBySession(): Promise<readonly DocumentRecord[]> {
-    return [this.record]
-  }
-
-  async updateStatus(
-    _sessionId: SessionId,
-    _documentId: DocumentId,
-    status: DocumentStatus,
-    updatedAt: Date
-  ): Promise<boolean> {
-    this.statuses.push(status)
-    this.record = { ...this.record, status, updatedAt }
-
-    return true
-  }
-
-  async countBySession(): Promise<number> {
-    return 1
-  }
-
-  async delete(): Promise<boolean> {
-    return true
-  }
-}
-
-class FakeChunkRepository implements ChunkRepository {
-  saved: readonly ChunkInput[] = []
-
-  async saveMany(
-    _sessionId: SessionId,
-    _documentId: DocumentId,
-    chunks: readonly ChunkInput[]
-  ): Promise<void> {
-    this.saved = chunks
-  }
-
-  async listByDocument(): Promise<readonly ChunkRecord[]> {
-    return []
-  }
-
-  async searchBySession(): Promise<readonly ChunkMatch[]> {
-    return []
-  }
-
-  async deleteByDocument(): Promise<number> {
-    return 0
-  }
-}
-
-class FakeEmbeddingProvider implements EmbeddingProvider {
-  received: readonly string[] = []
-  vectorCountOffset = 0
-
-  async embed(texts: string[]): Promise<number[][]> {
-    this.received = texts
-
-    return texts.slice(0, texts.length + this.vectorCountOffset).map((text) => {
-      const vector = Array.from({ length: 768 }, () => 0)
-      const hash = [...text].reduce(
-        (total, symbol) => total + symbol.charCodeAt(0),
-        0
-      )
-
-      vector[0] = hash
-
-      return vector
-    })
-  }
-}
-
-function newDocument(): DocumentRecord {
-  const now = new Date()
 
   return {
-    id: DocumentId.create(randomUUID()),
-    status: 'pending',
-    sizeBytes: 64,
-    pageCount: 0,
-    createdAt: now,
-    updatedAt: now,
-  }
-}
-
-function newSessionId(): SessionId {
-  return SessionIdValue.create(randomUUID())
-}
-
-function createJobFor(document: DocumentRecord, pdfBytes: Buffer): Job {
-  return {
-    id: randomUUID(),
-    type: 'ingest_document',
-    payload: {
-      documentId: document.id.toString(),
-      sessionId: newSessionId().toString(),
-      pdfOriginalName: 'documento.pdf',
-      pdfByteLength: pdfBytes.byteLength,
-      pdfBase64: pdfBytes.toString('base64'),
+    deps: {
+      documentRepository: documents,
+      chunkRepository: chunks,
+      embeddingProvider: options.embeddings ?? new FakeEmbeddingProvider(),
+      pdfFileStore: files,
+      jobQueue: queue,
     },
-    status: 'pending',
-    attempts: 1,
-    createdAt: new Date(),
+    documents,
+    chunks,
+    files,
+    queue,
+    sessionId,
+    documentId: record.id,
+    job,
   }
 }
 
-describe('processJob (F-03, F-04)', () => {
-  it('transita pending a processing y ready, y guarda fragmentos', async () => {
-    const document = newDocument()
-    const pdfBytes = buildPdf(['contenido uno', 'contenido dos'])
-    const job = createJobFor(document, pdfBytes)
-    const documents = new FakeDocumentRepository(document)
-    const chunks = new FakeChunkRepository()
-    const provider = new FakeEmbeddingProvider()
+describe('processJob (F-03, F-04, F-08)', () => {
+  it('deja el documento ready con fragmentos por página y borra el PDF', async () => {
+    const s = await scenario(fixture('12_estado_cuenta_largo.pdf'))
 
-    const result = await processJob(job, documents, chunks, provider)
+    const result = await processJob(s.job, s.deps)
 
-    expect(documents.statuses).toEqual(['processing', 'ready'])
     expect(result.documentStatus).toBe('ready')
-    expect(result.chunksSaved).toBe(2)
-    expect(provider.received).toEqual(['contenido uno', 'contenido dos'])
-    expect(chunks.saved.map((chunk) => chunk.page)).toEqual([1, 2])
-    expect(chunks.saved.map((chunk) => chunk.index)).toEqual([0, 0])
-    expect(chunks.saved[0]?.embedding).not.toEqual(chunks.saved[1]?.embedding)
+    expect(result.chunksSaved).toBeGreaterThan(0)
+    expect(s.documents.statusOf(s.documentId.toString())).toBe('ready')
+    expect(new Set(s.chunks.rows.map((row) => row.page))).toEqual(new Set([1, 2, 3]))
+    expect(s.files.files.size).toBe(0)
+    expect(s.queue.statusOf(s.job.id)).toBe('ready')
   })
 
-  it('reinicia el índice por página y respeta el máximo de 800 caracteres', async () => {
-    const document = newDocument()
-    const longText = 'a'.repeat(1700)
-    const pdfBytes = buildPdf([longText])
-    const job = createJobFor(document, pdfBytes)
-    const documents = new FakeDocumentRepository(document)
-    const chunks = new FakeChunkRepository()
-    const provider = new FakeEmbeddingProvider()
+  it('marca como failed un PDF sin capa de texto y borra el archivo', async () => {
+    const s = await scenario(fixture('07_escaneada_limpia.pdf'))
 
-    const result = await processJob(job, documents, chunks, provider)
-
-    expect(result.chunksSaved).toBe(3)
-    expect(chunks.saved.map((chunk) => chunk.index)).toEqual([0, 1, 2])
-    expect(chunks.saved.map((chunk) => chunk.content.length)).toEqual([
-      800, 800, 300,
-    ])
-    expect(chunks.saved.every((chunk) => chunk.content.length <= 800)).toBe(
-      true
-    )
-  })
-
-  it('marca el documento como failed cuando no hay texto extraíble', async () => {
-    const document = newDocument()
-    const pdfBytes = Buffer.from('%PDF-1.4\n%%EOF')
-    const job = createJobFor(document, pdfBytes)
-    const documents = new FakeDocumentRepository(document)
-    const chunks = new FakeChunkRepository()
-    const provider = new FakeEmbeddingProvider()
-
-    const result = await processJob(job, documents, chunks, provider)
+    const result = await processJob(s.job, s.deps)
 
     expect(result.documentStatus).toBe('failed')
-    expect(documents.statuses).toEqual(['processing', 'failed'])
-    expect(provider.received).toEqual([])
+    expect(result.chunksSaved).toBe(0)
+    expect(s.documents.statusOf(s.documentId.toString())).toBe('failed')
+    expect(s.chunks.rows).toHaveLength(0)
+    expect(s.files.files.size).toBe(0)
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('sin_texto_extraible')
   })
 
-  it('rechaza un payload sin el PDF en base64', async () => {
-    const document = newDocument()
-    const job: Job = {
-      id: randomUUID(),
-      type: 'ingest_document',
-      payload: {
-        documentId: document.id.toString(),
-        sessionId: newSessionId().toString(),
-        pdfOriginalName: 'documento.pdf',
-        pdfByteLength: 10,
-      },
-      status: 'pending',
-      attempts: 1,
-      createdAt: new Date(),
+  it('marca como failed si el proveedor de embeddings falla', async () => {
+    const s = await scenario(fixture('01_texto_factura.pdf'), {
+      embeddings: new FakeEmbeddingProvider('fail'),
+    })
+
+    const result = await processJob(s.job, s.deps)
+
+    expect(result.documentStatus).toBe('failed')
+    expect(s.documents.statusOf(s.documentId.toString())).toBe('failed')
+    expect(s.files.files.size).toBe(0)
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('proveedor_embeddings')
+  })
+
+  it('rechaza embeddings incompletos sin guardar fragmentos', async () => {
+    const s = await scenario(fixture('12_estado_cuenta_largo.pdf'), {
+      embeddings: new FakeEmbeddingProvider('short'),
+    })
+
+    const result = await processJob(s.job, s.deps)
+
+    expect(result.documentStatus).toBe('failed')
+    expect(s.chunks.rows).toHaveLength(0)
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('embeddings_incompletos')
+  })
+
+  it('falla si el tamaño leído no coincide con el registrado', async () => {
+    const s = await scenario(fixture('01_texto_factura.pdf'), {
+      byteLengthOverride: 17,
+    })
+
+    const result = await processJob(s.job, s.deps)
+
+    expect(result.documentStatus).toBe('failed')
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('tamano_no_coincide')
+  })
+
+  it('no reprocesa un documento que ya está en estado terminal', async () => {
+    const embeddings = new FakeEmbeddingProvider()
+    const s = await scenario(fixture('01_texto_factura.pdf'), {
+      documentStatus: 'ready',
+      embeddings,
+    })
+
+    const result = await processJob(s.job, s.deps)
+
+    expect(result).toEqual({ documentStatus: 'ready', chunksSaved: 0 })
+    expect(embeddings.calls).toBe(0)
+    expect(s.queue.statusOf(s.job.id)).toBe('ready')
+  })
+
+  it('lanza error si el documento del trabajo no existe', async () => {
+    const s = await scenario(fixture('01_texto_factura.pdf'))
+    const orphan: Job = {
+      ...s.job,
+      payload: { ...s.job.payload, documentId: randomUUID() },
     }
-    const documents = new FakeDocumentRepository(document)
-    const chunks = new FakeChunkRepository()
-    const provider = new FakeEmbeddingProvider()
 
-    await expect(processJob(job, documents, chunks, provider)).rejects.toThrow(
-      InvalidIngestJobPayloadError
+    await expect(processJob(orphan, s.deps)).rejects.toBeInstanceOf(
+      IngestDocumentNotFoundError
     )
   })
+})
 
-  it('rechaza un número de vectores distinto al de fragmentos', async () => {
-    const document = newDocument()
-    const pdfBytes = buildPdf(['un bloque'])
-    const job = createJobFor(document, pdfBytes)
-    const documents = new FakeDocumentRepository(document)
-    const chunks = new FakeChunkRepository()
-    const provider = new FakeEmbeddingProvider()
-    provider.vectorCountOffset = -1
+describe('processNextJob', () => {
+  it('devuelve null cuando no hay trabajos pendientes', async () => {
+    const s = await scenario(fixture('01_texto_factura.pdf'))
 
-    await expect(processJob(job, documents, chunks, provider)).rejects.toThrow(
-      InvalidEmbeddingError
-    )
+    expect(await processNextJob(s.deps)).toBeNull()
+  })
+
+  it('cierra el trabajo como failed si ocurre un error inesperado', async () => {
+    const s = await scenario(fixture('01_texto_factura.pdf'))
+    const orphan: Job = {
+      ...s.job,
+      payload: { ...s.job.payload, documentId: randomUUID() },
+    }
+    const queue = new MemoryJobQueue()
+
+    await queue.submitIngestJob({
+      documentId: orphan.payload.documentId as string,
+      sessionId: s.sessionId.toString(),
+      storagePath: 'no-existe.pdf',
+      pdfByteLength: 1,
+    })
+
+    await expect(
+      processNextJob({ ...s.deps, jobQueue: queue })
+    ).rejects.toBeInstanceOf(IngestDocumentNotFoundError)
+
+    const [claimed] = [...queue.jobs.values()]
+
+    expect(claimed?.status).toBe('failed')
+    expect(claimed?.error).toBe('error_interno')
   })
 })

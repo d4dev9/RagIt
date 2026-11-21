@@ -5,9 +5,8 @@ export type JobStatus = 'pending' | 'processing' | 'ready' | 'failed'
 export interface IngestDocumentJobPayload {
   readonly documentId: string
   readonly sessionId: string
-  readonly pdfOriginalName: string
+  readonly storagePath: string
   readonly pdfByteLength: number
-  readonly pdfBase64: string
 }
 
 export interface Job {
@@ -24,18 +23,9 @@ export interface Job {
 }
 
 export interface JobQueue {
-  submitIngestJob(
-    documentId: string,
-    sessionId: string,
-    pdfBytes: Buffer,
-    pdfOriginalName: string
-  ): Promise<Job>
-
+  submitIngestJob(payload: IngestDocumentJobPayload): Promise<Job>
   getJob(id: string): Promise<Job | null>
-
   claimNextJob(): Promise<Job | null>
-
   markReady(id: string, result: Record<string, unknown>): Promise<void>
-
   markFailed(id: string, error: string): Promise<void>
 }

@@ -1,22 +1,12 @@
-import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { loadEnvFile } from 'node:process'
 import { runMigrations } from '../src/infrastructure/database/migrate'
 
-if (existsSync('.env')) {
-  loadEnvFile()
-}
-
-const connectionString =
-  process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL
+const connectionString = process.env.MIGRATION_DATABASE_URL
 
 if (!connectionString) {
-  throw new Error('MIGRATION_DATABASE_URL is required')
+  process.stderr.write('Falta la variable MIGRATION_DATABASE_URL\n')
+  process.exit(1)
 }
 
-await runMigrations({
-  connectionString,
-  directory: resolve('migrations'),
-})
-
-process.stdout.write('Migrations applied\n')
+await runMigrations({ connectionString, directory: resolve('migrations') })
+process.stdout.write('Migraciones aplicadas\n')

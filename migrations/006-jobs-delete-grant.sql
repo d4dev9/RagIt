@@ -1,0 +1,1 @@
+GRANT DELETE ON jobs TO ragit_app;

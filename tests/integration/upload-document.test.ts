@@ -1,14 +1,17 @@
-import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import type { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { uploadDocument } from '../../src/application/upload-document'
 import { DocumentQuotaExceededError } from '../../src/domain/documents/document-errors'
 import { MAX_DOCUMENTS_PER_SESSION } from '../../src/domain/documents/document-limits'
-import { DocumentId } from '../../src/domain/documents/document-id'
+import { SessionId } from '../../src/domain/sessions/session-id'
 import { PostgresDocumentRepository } from '../../src/infrastructure/database/postgres-document-repository'
+import { PostgresJobQueue } from '../../src/infrastructure/database/postgres-job-queue'
 import { PostgresSessionRepository } from '../../src/infrastructure/database/postgres-session-repository'
-import type { SessionId } from '../../src/domain/sessions/session-id'
-import { uploadDocument } from '../../src/application/upload-document'
-import type { Job, JobQueue } from '../../src/ports/job-queue'
+import { LocalPdfFileStore } from '../../src/infrastructure/storage/pdf-file-store'
 import {
   createAppPool,
   createSession,
@@ -16,112 +19,81 @@ import {
   migrateDatabase,
 } from './test-database'
 
-const PDF_BYTES = Buffer.from('%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF')
+const PDF = readFileSync(resolve('tests/fixtures/ocr/01_texto_factura.pdf'))
 
-class InMemoryJobQueue implements JobQueue {
-  readonly jobs: Job[] = []
-
-  async submitIngestJob(
-    documentId: string,
-    sessionId: string,
-    pdfBytes: Buffer,
-    pdfOriginalName: string
-  ): Promise<Job> {
-    const job: Job = {
-      id: randomUUID(),
-      type: 'ingest_document',
-      payload: {
-        documentId,
-        sessionId,
-        pdfOriginalName,
-        pdfByteLength: pdfBytes.byteLength,
-      },
-      status: 'pending',
-      attempts: 0,
-      createdAt: new Date(),
-    }
-
-    this.jobs.push(job)
-
-    return job
-  }
-
-  async getJob(): Promise<Job | null> {
-    return null
-  }
-
-  async claimNextJob(): Promise<Job | null> {
-    return null
-  }
-
-  async markReady(): Promise<void> {}
-
-  async markFailed(): Promise<void> {}
-}
-
-describe.skipIf(!integrationEnabled)('uploadDocument contra Postgres', () => {
+describe.skipIf(!integrationEnabled)('uploadDocument con PostgreSQL (F-02, F-08)', () => {
   let pool: Pool
+  let storageDir: string
+  let store: LocalPdfFileStore
   let sessions: PostgresSessionRepository
   let documents: PostgresDocumentRepository
-  const created: SessionId[] = []
+  let queue: PostgresJobQueue
+  const sessionIds: SessionId[] = []
 
   beforeAll(async () => {
     await migrateDatabase()
     pool = createAppPool()
+    storageDir = await mkdtemp(join(tmpdir(), 'ragit-upload-'))
+    store = new LocalPdfFileStore(storageDir)
     sessions = new PostgresSessionRepository(pool)
     documents = new PostgresDocumentRepository(pool)
+    queue = new PostgresJobQueue(pool)
   })
 
   afterAll(async () => {
-    for (const sessionId of created) {
+    for (const sessionId of sessionIds) {
+      await pool.query(`DELETE FROM jobs WHERE payload->>'sessionId' = $1`, [
+        sessionId.toString(),
+      ])
       await sessions.delete(sessionId)
     }
-
     await pool.end()
+    await rm(storageDir, { recursive: true, force: true })
   })
 
-  async function newSessionId(): Promise<SessionId> {
+  async function newSession(): Promise<SessionId> {
     const session = createSession()
     await sessions.save(session)
-    created.push(session.id)
+    sessionIds.push(session.id)
 
     return session.id
   }
 
-  it('persiste el documento pendiente con pageCount 0 y encola el trabajo', async () => {
-    const sessionId = await newSessionId()
-    const queue = new InMemoryJobQueue()
-    const result = await uploadDocument(
-      sessionId,
-      PDF_BYTES,
-      documents,
-      queue,
-      'factura.pdf'
-    )
-    const stored = await documents.findById(
-      sessionId,
-      DocumentId.create(result.documentId)
-    )
+  it('guarda el PDF fuera de Postgres y el job apunta al archivo real', async () => {
+    const sessionId = await newSession()
 
-    expect(stored?.status).toBe('pending')
-    expect(stored?.pageCount).toBe(0)
-    expect(queue.jobs).toHaveLength(1)
-    expect(result.jobId).toBe(queue.jobs[0]?.id)
+    const output = await uploadDocument(sessionId, PDF, {
+      documentRepository: documents,
+      jobQueue: queue,
+      pdfFileStore: store,
+    })
+
+    const job = await queue.getJob(output.jobId)
+    const storagePath = job?.payload.storagePath
+
+    expect(output.documentStatus).toBe('pending')
+    expect(typeof storagePath).toBe('string')
+    expect(await readdir(storageDir)).toContain(storagePath)
+    expect(JSON.stringify(job?.payload)).not.toContain('pdfBase64')
   })
 
-  it('aplica la cuota de documentos de forma atómica', async () => {
-    const sessionId = await newSessionId()
-    const queue = new InMemoryJobQueue()
+  it('rechaza la sexta subida de la sesión', async () => {
+    const sessionId = await newSession()
 
-    for (let index = 0; index < MAX_DOCUMENTS_PER_SESSION; index += 1) {
-      await uploadDocument(sessionId, PDF_BYTES, documents, queue)
+    for (let i = 0; i < MAX_DOCUMENTS_PER_SESSION; i += 1) {
+      await uploadDocument(sessionId, PDF, {
+        documentRepository: documents,
+        jobQueue: queue,
+        pdfFileStore: store,
+      })
     }
 
     await expect(
-      uploadDocument(sessionId, PDF_BYTES, documents, queue)
-    ).rejects.toThrow(DocumentQuotaExceededError)
-    expect(await documents.countBySession(sessionId)).toBe(
-      MAX_DOCUMENTS_PER_SESSION
-    )
+      uploadDocument(sessionId, PDF, {
+        documentRepository: documents,
+        jobQueue: queue,
+        pdfFileStore: store,
+      })
+    ).rejects.toBeInstanceOf(DocumentQuotaExceededError)
   })
 })

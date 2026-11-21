@@ -1,6 +1,6 @@
 export class InvalidIngestJobPayloadError extends Error {
-  constructor() {
-    super('El trabajo de ingesta no contiene un payload válido')
+  constructor(message?: string) {
+    super(message || 'El trabajo de ingesta no contiene un payload válido')
     this.name = 'InvalidIngestJobPayloadError'
   }
 }
