@@ -34,6 +34,8 @@ export function newDocumentRecord(status: DocumentStatus = 'pending'): DocumentR
   return {
     id: DocumentId.create(randomUUID()),
     status,
+    storagePath: `${randomUUID()}.pdf`,
+    displayName: 'documento.pdf',
     sizeBytes: 1024,
     pageCount: 0,
     createdAt: now,
@@ -241,6 +243,28 @@ export class MemoryJobQueue implements JobQueue {
 
   async markFailed(id: string, error: string): Promise<void> {
     this.finish(id, 'failed', { error })
+  }
+
+  async deleteByDocument(
+    sessionId: SessionId,
+    documentId: DocumentId
+  ): Promise<void> {
+    for (const [id, job] of this.jobs) {
+      if (
+        job.payload.sessionId === sessionId.toString() &&
+        job.payload.documentId === documentId.toString()
+      ) {
+        this.jobs.delete(id)
+      }
+    }
+  }
+
+  async deleteBySession(sessionId: SessionId): Promise<void> {
+    for (const [id, job] of this.jobs) {
+      if (job.payload.sessionId === sessionId.toString()) {
+        this.jobs.delete(id)
+      }
+    }
   }
 
   statusOf(id: string): string | undefined {

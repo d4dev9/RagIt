@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { uploadDocument } from '../../src/application/upload-document'
 import { DocumentQuotaExceededError } from '../../src/domain/documents/document-errors'
 import { MAX_DOCUMENTS_PER_SESSION } from '../../src/domain/documents/document-limits'
+import { DocumentId } from '../../src/domain/documents/document-id'
 import { SessionId } from '../../src/domain/sessions/session-id'
 import { PostgresDocumentRepository } from '../../src/infrastructure/database/postgres-document-repository'
 import { PostgresJobQueue } from '../../src/infrastructure/database/postgres-job-queue'
@@ -75,6 +76,26 @@ describe.skipIf(!integrationEnabled)('uploadDocument con PostgreSQL (F-02, F-08)
     expect(typeof storagePath).toBe('string')
     expect(await readdir(storageDir)).toContain(storagePath)
     expect(JSON.stringify(job?.payload)).not.toContain('pdfBase64')
+  })
+
+  it('sanea el nombre original antes de persistirlo', async () => {
+    const sessionId = await newSession()
+
+    const output = await uploadDocument(sessionId, PDF, {
+      documentRepository: documents,
+      jobQueue: queue,
+      pdfFileStore: store,
+      displayName: 'C:\\private\\..\\factura\u0000.pdf',
+    })
+    const document = await documents.findById(
+      sessionId,
+      DocumentId.create(output.documentId)
+    )
+
+    expect(document?.id.equals(DocumentId.create(output.documentId))).toBe(
+      true
+    )
+    expect(document?.displayName).toBe('factura.pdf')
   })
 
   it('rechaza la sexta subida de la sesión', async () => {

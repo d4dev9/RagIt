@@ -80,7 +80,7 @@ async function scenario(
 }
 
 describe('processJob (F-03, F-04, F-08)', () => {
-  it('deja el documento ready con fragmentos por página y borra el PDF', async () => {
+  it('deja el documento ready con fragmentos por página y conserva el PDF', async () => {
     const s = await scenario(fixture('12_estado_cuenta_largo.pdf'))
 
     const result = await processJob(s.job, s.deps)
@@ -89,11 +89,11 @@ describe('processJob (F-03, F-04, F-08)', () => {
     expect(result.chunksSaved).toBeGreaterThan(0)
     expect(s.documents.statusOf(s.documentId.toString())).toBe('ready')
     expect(new Set(s.chunks.rows.map((row) => row.page))).toEqual(new Set([1, 2, 3]))
-    expect(s.files.files.size).toBe(0)
+    expect(s.files.files.size).toBe(1)
     expect(s.queue.statusOf(s.job.id)).toBe('ready')
   })
 
-  it('marca como failed un PDF sin capa de texto y borra el archivo', async () => {
+  it('marca como failed un PDF sin capa de texto y conserva el archivo', async () => {
     const s = await scenario(fixture('07_escaneada_limpia.pdf'))
 
     const result = await processJob(s.job, s.deps)
@@ -102,7 +102,7 @@ describe('processJob (F-03, F-04, F-08)', () => {
     expect(result.chunksSaved).toBe(0)
     expect(s.documents.statusOf(s.documentId.toString())).toBe('failed')
     expect(s.chunks.rows).toHaveLength(0)
-    expect(s.files.files.size).toBe(0)
+    expect(s.files.files.size).toBe(1)
     expect(s.queue.jobs.get(s.job.id)?.error).toBe('sin_texto_extraible')
   })
 
@@ -115,7 +115,7 @@ describe('processJob (F-03, F-04, F-08)', () => {
 
     expect(result.documentStatus).toBe('failed')
     expect(s.documents.statusOf(s.documentId.toString())).toBe('failed')
-    expect(s.files.files.size).toBe(0)
+    expect(s.files.files.size).toBe(1)
     expect(s.queue.jobs.get(s.job.id)?.error).toBe('proveedor_embeddings')
   })
 

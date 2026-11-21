@@ -68,9 +68,13 @@ describe('uploadDocument (F-02, F-08)', () => {
     const sessionId = SessionId.create(randomUUID())
     const pdf = fixture('01_texto_factura.pdf')
 
-    const output = await uploadDocument(sessionId, pdf, d)
+    const output = await uploadDocument(sessionId, pdf, {
+      ...d,
+      displayName: 'C:\\private\\factura.pdf\u0000',
+    })
 
     expect(output.documentStatus).toBe('pending')
+    expect(output.displayName).toBe('factura.pdf')
     expect(documents.statusOf(output.documentId)).toBe('pending')
     expect(jobQueue.submitted).toHaveLength(1)
 
@@ -79,6 +83,9 @@ describe('uploadDocument (F-02, F-08)', () => {
     expect(payload?.pdfByteLength).toBe(pdf.byteLength)
     expect(payload?.storagePath).toMatch(/^[0-9a-f-]{36}\.pdf$/)
     expect(files.files.has(payload?.storagePath ?? '')).toBe(true)
+    const [storedDocument] = await documents.listBySession(sessionId)
+    expect(storedDocument?.storagePath).toBe(payload?.storagePath)
+    expect(storedDocument?.displayName).toBe('factura.pdf')
     expect(JSON.stringify(payload)).not.toContain('pdfBase64')
   })
 
@@ -99,7 +106,7 @@ describe('uploadDocument (F-02, F-08)', () => {
     expect(only?.status).toBe('failed')
   })
 
-  it('si el almacenamiento falla, no encola nada y marca el documento como failed', async () => {
+  it('si el almacenamiento falla, no encola ni guarda el documento', async () => {
     const { documents, jobQueue, deps: d } = deps()
     d.pdfFileStore.save = async () => {
       throw new Error('disco lleno')
@@ -111,7 +118,6 @@ describe('uploadDocument (F-02, F-08)', () => {
     ).rejects.toThrow('disco lleno')
 
     expect(jobQueue.submitted).toHaveLength(0)
-    const [only] = await documents.listBySession(sessionId)
-    expect(only?.status).toBe('failed')
+    expect(await documents.listBySession(sessionId)).toHaveLength(0)
   })
 })

@@ -164,7 +164,6 @@ export async function processJob(
     new Date()
   )
 
-  await deps.pdfFileStore.remove(payload.storagePath)
   await deps.jobQueue.markReady(job.id, {
     documentStatus: 'ready',
     chunksSaved: chunks.length,
@@ -188,7 +187,6 @@ async function failJob(
     'failed',
     new Date()
   )
-  await deps.pdfFileStore.remove(payload.storagePath)
   await deps.jobQueue.markFailed(job.id, reason)
 
   return { documentStatus: 'failed', chunksSaved: 0 }
@@ -238,5 +236,4 @@ async function recoverUnexpectedFailure(
     )
   }
 
-  await deps.pdfFileStore.remove(payload.storagePath)
 }

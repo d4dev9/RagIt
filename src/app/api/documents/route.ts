@@ -73,11 +73,16 @@ export async function POST(request: Request): Promise<Response> {
         documentRepository: new PostgresDocumentRepository(pool),
         jobQueue: new PostgresJobQueue(pool),
         pdfFileStore: createPdfFileStoreFromEnv(),
+        displayName: file.name,
       }
     )
 
     return Response.json(
-      { documentId: result.documentId, status: result.documentStatus },
+      {
+        documentId: result.documentId,
+        displayName: result.displayName,
+        status: result.documentStatus,
+      },
       { status: 202 }
     )
   } catch (error) {
@@ -87,7 +92,7 @@ export async function POST(request: Request): Promise<Response> {
     ) {
       return Response.json(
         { error: 'El archivo no es válido' },
-        { status: 400 }
+        { status: error instanceof PdfTooLargeError ? 413 : 400 }
       )
     }
 
@@ -119,6 +124,8 @@ export async function GET(): Promise<Response> {
     return Response.json({
       documents: documents.map((document) => ({
         documentId: document.id.toString(),
+        displayName: document.displayName,
+        available: document.storagePath !== null,
         status: document.status,
         sizeBytes: document.sizeBytes,
         createdAt: document.createdAt.toISOString(),

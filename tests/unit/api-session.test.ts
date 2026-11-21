@@ -53,6 +53,10 @@ class FakeSessionRepository implements SessionRepository {
     return this.sessions.get(sessionId.toString()) ?? null
   }
 
+  async listExpired(): Promise<readonly Session[]> {
+    return []
+  }
+
   async delete(sessionId: SessionId): Promise<boolean> {
     return this.sessions.delete(sessionId.toString())
   }

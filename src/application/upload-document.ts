@@ -10,6 +10,7 @@ import {
 } from '../domain/documents/document-limits'
 import { DocumentQuotaExceededError } from '../domain/documents/document-errors'
 import { assertPdfSignature } from '../domain/documents/pdf-signature'
+import { sanitizeDisplayName } from '../domain/documents/display-name'
 import type { SessionId } from '../domain/sessions/session-id'
 import type {
   DocumentRecord,
@@ -22,10 +23,12 @@ export interface UploadDependencies {
   readonly documentRepository: DocumentRepository
   readonly jobQueue: JobQueue
   readonly pdfFileStore: PdfFileStore
+  readonly displayName?: string
 }
 
 export interface UploadDocumentOutput {
   readonly documentId: string
+  readonly displayName: string
   readonly jobId: string
   readonly documentStatus: DocumentStatus
 }
@@ -42,33 +45,35 @@ export async function uploadDocument(
   assertDocumentQuota(await deps.documentRepository.countBySession(sessionId))
 
   const documentId = DocumentId.create(randomUUID())
+  const storagePath = await deps.pdfFileStore.save(pdfBytes)
   const now = new Date()
   const record: DocumentRecord = {
     id: documentId,
     status: DocumentState.pending().status,
+    storagePath,
+    displayName: sanitizeDisplayName(deps.displayName, documentId),
     sizeBytes: pdfBytes.byteLength,
     pageCount: 0,
     createdAt: now,
     updatedAt: now,
   }
 
-  const stored = await deps.documentRepository.saveIfBelowQuota(
-    sessionId,
-    record,
-    MAX_DOCUMENTS_PER_SESSION
-  )
-
-  if (!stored) {
-    throw new DocumentQuotaExceededError()
-  }
-
-  let storagePath: string
+  let stored: boolean
 
   try {
-    storagePath = await deps.pdfFileStore.save(pdfBytes)
+    stored = await deps.documentRepository.saveIfBelowQuota(
+      sessionId,
+      record,
+      MAX_DOCUMENTS_PER_SESSION
+    )
   } catch (error) {
-    await markFailed(deps.documentRepository, sessionId, documentId)
+    await deps.pdfFileStore.remove(storagePath)
     throw error
+  }
+
+  if (!stored) {
+    await deps.pdfFileStore.remove(storagePath)
+    throw new DocumentQuotaExceededError()
   }
 
   try {
@@ -81,6 +86,7 @@ export async function uploadDocument(
 
     return {
       documentId: documentId.toString(),
+      displayName: record.displayName,
       jobId: job.id,
       documentStatus: record.status,
     }

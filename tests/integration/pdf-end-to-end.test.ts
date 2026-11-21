@@ -1,10 +1,11 @@
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { access, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
 import type { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { askQuestion } from '../../src/application/ask-question'
+import { deleteDocument } from '../../src/application/delete-document'
 import { processNextJob } from '../../src/application/process-job'
 import { uploadDocument } from '../../src/application/upload-document'
 import { DocumentId } from '../../src/domain/documents/document-id'
@@ -115,7 +116,7 @@ describe.skipIf(!integrationEnabled)(
       await rm(storageDir, { recursive: true, force: true })
     })
 
-    it('sube, procesa y deja el documento listo sin guardar el PDF en la base', async () => {
+    it('conserva el PDF listo hasta que se elimina el documento', async () => {
       const documents = new PostgresDocumentRepository(pool)
       const chunks = new PostgresChunkRepository(pool)
       const queue = new PostgresJobQueue(pool)
@@ -150,11 +151,34 @@ describe.skipIf(!integrationEnabled)(
       const document = await documents.findById(sessionId, documentId)
       expect(document?.status).toBe('ready')
 
+      if (!document) {
+        throw new Error('El documento procesado no existe')
+      }
+
+      if (!document.storagePath) {
+        throw new Error('El PDF procesado no tiene ruta de almacenamiento')
+      }
+
+      const storagePath = document.storagePath
       const saved = await chunks.listByDocument(sessionId, documentId)
       expect(new Set(saved.map((row) => row.page))).toEqual(new Set([1, 2, 3]))
 
       const job = await queue.getJob(uploaded.jobId)
       expect(job?.status).toBe('ready')
+      expect(await readdir(storageDir)).toContain(storagePath)
+
+      expect(
+        await deleteDocument(sessionId, uploaded.documentId, {
+          documentRepository: documents,
+          chunkRepository: chunks,
+          jobQueue: queue,
+          pdfFileStore: files,
+        })
+      ).toBe(true)
+      await expect(access(join(storageDir, storagePath))).rejects.toThrow()
+      expect(await chunks.listByDocument(sessionId, documentId)).toEqual([])
+      expect(await documents.findById(sessionId, documentId)).toBeNull()
+      expect(await queue.getJob(uploaded.jobId)).toBeNull()
       expect(await readdir(storageDir)).toHaveLength(0)
     })
 
