@@ -128,17 +128,21 @@ export class PostgresChunkRepository implements ChunkRepository {
     const result = await this.pool.query<ChunkRow>(
       `
         SELECT
-          id,
-          document_id,
-          page,
-          chunk_index,
-          content,
-          embedding,
-          created_at,
-          embedding <=> $2::vector AS distance
+          chunks.id,
+          chunks.document_id,
+          chunks.page,
+          chunks.chunk_index,
+          chunks.content,
+          chunks.embedding,
+          chunks.created_at,
+          chunks.embedding <=> $2::vector AS distance
         FROM chunks
-        WHERE session_id = $1
-        ORDER BY embedding <=> $2::vector
+        INNER JOIN documents
+          ON documents.id = chunks.document_id
+          AND documents.session_id = chunks.session_id
+        WHERE chunks.session_id = $1
+          AND documents.storage_path IS NOT NULL
+        ORDER BY chunks.embedding <=> $2::vector
         LIMIT $3
       `,
       [sessionId.toString(), toVectorLiteral(embedding), limit]
@@ -161,4 +165,5 @@ export class PostgresChunkRepository implements ChunkRepository {
 
     return result.rowCount ?? 0
   }
+
 }

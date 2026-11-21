@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Demo RAG para analizar PDFs con citas por página y aislamiento por sesión",
   "scripts": {
+    "dev": "next dev",
     "lint": "eslint .",
     "check": "tsc --noEmit",
     "build": "next build",
@@ -10,7 +11,8 @@
     "test:integration": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run tests/integration --no-file-parallelism",
     "verify": "pnpm lint && pnpm check && pnpm test && pnpm build",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
-    "worker:ingest": "node --env-file-if-exists=.env --import tsx scripts/ingest-worker.ts"
+    "worker:ingest": "node --env-file-if-exists=.env --import tsx scripts/ingest-worker.ts",
+    "cleanup:expired": "node --env-file-if-exists=.env --import tsx scripts/cleanup-expired.ts"
   },
   "keywords": [],
   "author": "",

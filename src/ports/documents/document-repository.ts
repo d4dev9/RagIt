@@ -5,6 +5,8 @@ import type { SessionId } from '../../domain/sessions/session-id'
 export interface DocumentRecord {
   readonly id: DocumentId
   readonly status: DocumentStatus
+  readonly storagePath: string | null
+  readonly displayName: string
   readonly sizeBytes: number
   readonly pageCount: number
   readonly createdAt: Date

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Pool } from 'pg'
+import type { DocumentId } from '../../domain/documents/document-id'
+import type { SessionId } from '../../domain/sessions/session-id'
 import type {
   IngestDocumentJobPayload,
   Job,
@@ -144,6 +146,31 @@ export class PostgresJobQueue implements JobQueue {
         WHERE id = $1 AND status = 'processing'
       `,
       [id, error]
+    )
+  }
+
+  async deleteByDocument(
+    sessionId: SessionId,
+    documentId: DocumentId
+  ): Promise<void> {
+    await this.pool.query(
+      `
+        DELETE FROM jobs
+        WHERE type = $1
+          AND payload->>'sessionId' = $2
+          AND payload->>'documentId' = $3
+      `,
+      [INGEST_DOCUMENT_JOB_TYPE, sessionId.toString(), documentId.toString()]
+    )
+  }
+
+  async deleteBySession(sessionId: SessionId): Promise<void> {
+    await this.pool.query(
+      `
+        DELETE FROM jobs
+        WHERE type = $1 AND payload->>'sessionId' = $2
+      `,
+      [INGEST_DOCUMENT_JOB_TYPE, sessionId.toString()]
     )
   }
 }

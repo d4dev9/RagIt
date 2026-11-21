@@ -102,6 +102,18 @@ describe.skipIf(!integrationEnabled)('PostgresDocumentRepository', () => {
     expect(await documents.findById(owner, document.id)).not.toBeNull()
   })
 
+  it('rechaza una ruta de almacenamiento duplicada', async () => {
+    const sessionId = await newSession()
+    const first = createDocumentRecord()
+    const second = createDocumentRecord({ storagePath: first.storagePath })
+
+    await documents.save(sessionId, first)
+
+    await expect(documents.save(sessionId, second)).rejects.toMatchObject({
+      code: '23505',
+    })
+  })
+
   it('elimina un documento y sus fragmentos en cascada', async () => {
     const sessionId = await newSession()
     const document = await saveDocument(sessionId)

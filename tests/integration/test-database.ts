@@ -50,6 +50,8 @@ export function createSession(now: Date = new Date()): Session {
 
 export interface DocumentOverrides {
   readonly status?: DocumentStatus
+  readonly storagePath?: string | null
+  readonly displayName?: string
   readonly sizeBytes?: number
   readonly pageCount?: number
   readonly createdAt?: Date
@@ -60,10 +62,16 @@ export function createDocumentRecord(
   overrides: DocumentOverrides = {}
 ): DocumentRecord {
   const now = new Date()
+  const id = DocumentId.create(randomUUID())
 
   return {
-    id: DocumentId.create(randomUUID()),
+    id,
     status: overrides.status ?? 'pending',
+    storagePath:
+      overrides.storagePath === undefined
+        ? `${randomUUID()}.pdf`
+        : overrides.storagePath,
+    displayName: overrides.displayName ?? 'documento.pdf',
     sizeBytes: overrides.sizeBytes ?? 1024,
     pageCount: overrides.pageCount ?? 1,
     createdAt: overrides.createdAt ?? now,

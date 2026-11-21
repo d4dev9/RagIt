@@ -91,6 +91,25 @@ describe.skipIf(!integrationEnabled)('PostgresChunkRepository', () => {
     expect(found[0]?.distance).toBeCloseTo(0, 6)
   })
 
+  it('excluye de la búsqueda los fragmentos de documentos sin archivo', async () => {
+    const session = createSession()
+    await sessions.save(session)
+    created.push(session.id)
+    const legacyDocument = createDocumentRecord({ storagePath: null })
+    await documents.save(session.id, legacyDocument)
+    await chunks.saveMany(session.id, legacyDocument.id, [
+      createChunkInput(0, 'fragmento heredado sin archivo', createEmbedding(1)),
+    ])
+
+    const found = await chunks.searchBySession(
+      session.id,
+      createEmbedding(1),
+      5
+    )
+
+    expect(found).toEqual([])
+  })
+
   it('elimina los fragmentos de un documento', async () => {
     const { sessionId, documentId } = await newDocument()
     await chunks.saveMany(sessionId, documentId, [

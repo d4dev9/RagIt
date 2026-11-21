@@ -1,4 +1,5 @@
 import type { Pool } from 'pg'
+import { SESSION_INACTIVITY_LIMIT_MS } from '../../domain/sessions/session'
 import { Session } from '../../domain/sessions/session'
 import { SessionId } from '../../domain/sessions/session-id'
 import type { SessionRepository } from '../../ports/sessions/session-repository'
@@ -43,6 +44,27 @@ export class PostgresSessionRepository implements SessionRepository {
       SessionId.create(row.id),
       row.created_at,
       row.last_activity_at
+    )
+  }
+
+  async listExpired(now: Date): Promise<readonly Session[]> {
+    const expiresBefore = new Date(now.getTime() - SESSION_INACTIVITY_LIMIT_MS)
+    const result = await this.pool.query<SessionRow>(
+      `
+        SELECT id, created_at, last_activity_at
+        FROM sessions
+        WHERE last_activity_at <= $1
+        ORDER BY last_activity_at ASC, id ASC
+      `,
+      [expiresBefore]
+    )
+
+    return result.rows.map((row) =>
+      Session.restore(
+        SessionId.create(row.id),
+        row.created_at,
+        row.last_activity_at
+      )
     )
   }
 

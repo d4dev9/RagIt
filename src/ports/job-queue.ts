@@ -1,3 +1,6 @@
+import type { DocumentId } from '../domain/documents/document-id'
+import type { SessionId } from '../domain/sessions/session-id'
+
 export const INGEST_DOCUMENT_JOB_TYPE = 'ingest_document'
 
 export type JobStatus = 'pending' | 'processing' | 'ready' | 'failed'
@@ -28,4 +31,6 @@ export interface JobQueue {
   claimNextJob(): Promise<Job | null>
   markReady(id: string, result: Record<string, unknown>): Promise<void>
   markFailed(id: string, error: string): Promise<void>
+  deleteByDocument(sessionId: SessionId, documentId: DocumentId): Promise<void>
+  deleteBySession(sessionId: SessionId): Promise<void>
 }

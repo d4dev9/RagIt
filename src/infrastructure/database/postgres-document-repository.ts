@@ -12,6 +12,8 @@ import type {
 type DocumentRow = {
   id: string
   status: string
+  storage_path: string | null
+  display_name: string | null
   size_bytes: number
   page_count: number
   created_at: Date
@@ -22,6 +24,8 @@ function toRecord(row: DocumentRow): DocumentRecord {
   return {
     id: DocumentId.create(row.id),
     status: DocumentState.from(row.status).status,
+    storagePath: row.storage_path,
+    displayName: row.display_name ?? 'Documento no disponible',
     sizeBytes: row.size_bytes,
     pageCount: row.page_count,
     createdAt: row.created_at,
@@ -42,14 +46,18 @@ async function insertDocument(
         id,
         session_id,
         status,
+        storage_path,
+        display_name,
         size_bytes,
         page_count,
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (id) DO UPDATE
       SET status = EXCLUDED.status,
+          storage_path = EXCLUDED.storage_path,
+          display_name = EXCLUDED.display_name,
           size_bytes = EXCLUDED.size_bytes,
           page_count = EXCLUDED.page_count,
           updated_at = EXCLUDED.updated_at
@@ -59,6 +67,8 @@ async function insertDocument(
       document.id.toString(),
       sessionId.toString(),
       document.status,
+      document.storagePath,
+      document.displayName,
       document.sizeBytes,
       document.pageCount,
       document.createdAt,
@@ -124,7 +134,7 @@ export class PostgresDocumentRepository implements DocumentRepository {
   ): Promise<DocumentRecord | null> {
     const result = await this.pool.query<DocumentRow>(
       `
-        SELECT id, status, size_bytes, page_count, created_at, updated_at
+        SELECT id, status, storage_path, display_name, size_bytes, page_count, created_at, updated_at
         FROM documents
         WHERE id = $1 AND session_id = $2
       `,
@@ -140,7 +150,7 @@ export class PostgresDocumentRepository implements DocumentRepository {
   ): Promise<readonly DocumentRecord[]> {
     const result = await this.pool.query<DocumentRow>(
       `
-        SELECT id, status, size_bytes, page_count, created_at, updated_at
+        SELECT id, status, storage_path, display_name, size_bytes, page_count, created_at, updated_at
         FROM documents
         WHERE session_id = $1
         ORDER BY created_at ASC, id ASC
