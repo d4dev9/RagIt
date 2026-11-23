@@ -8,6 +8,7 @@ export const NO_INFORMATION_ANSWER =
 
 export interface RetrievedChunk {
   readonly documentId: string
+  readonly displayName: string
   readonly page: number
   readonly chunkIndex: number
   readonly content: string
@@ -15,8 +16,15 @@ export interface RetrievedChunk {
 }
 
 export interface Citation {
+  readonly index: number
   readonly documentId: string
+  readonly displayName: string
   readonly page: number
+}
+
+export interface ResolvedAnswer {
+  readonly answer: string
+  readonly citations: readonly Citation[]
 }
 
 export function normalizeQuestion(question: string): string {
@@ -47,22 +55,46 @@ export function selectRelevantChunks(
     .slice(0, MAX_CONTEXT_CHUNKS)
 }
 
-export function toCitations(
+export function resolveAnswer(
+  answer: string,
   chunks: readonly RetrievedChunk[]
-): readonly Citation[] {
-  const seen = new Set<string>()
-  const citations: Citation[] = []
+): ResolvedAnswer {
+  const chunksByIndex = new Map(
+    chunks.map((chunk, index) => [index + 1, chunk])
+  )
+  const usedIndexes = new Set<number>()
+  const withValidMarkers = answer.replace(/\[(\d+)\]/g, (marker, value: string) => {
+    const index = Number(value)
 
-  for (const chunk of chunks) {
-    const key = `${chunk.documentId}:${chunk.page}`
-
-    if (seen.has(key)) {
-      continue
+    if (!chunksByIndex.has(index)) {
+      return ''
     }
 
-    seen.add(key)
-    citations.push({ documentId: chunk.documentId, page: chunk.page })
+    usedIndexes.add(index)
+
+    return marker
+  })
+  const sanitizedAnswer = withValidMarkers
+    .replace(/\[documento\s*:[^\]]*\]/gi, '')
+    .replace(/\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/gi, '')
+    .replace(/[ \t]+([,.;:!?])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim()
+  const citations: Citation[] = []
+
+  for (const index of usedIndexes) {
+    const chunk = chunksByIndex.get(index)
+
+    if (chunk) {
+      citations.push({
+        index,
+        documentId: chunk.documentId,
+        displayName: chunk.displayName,
+        page: chunk.page,
+      })
+    }
   }
 
-  return citations
+  return { answer: sanitizedAnswer, citations }
 }

@@ -19,11 +19,14 @@ import {
   createSession,
   integrationEnabled,
   migrateDatabase,
+  TEST_EMBEDDING_MODEL_NAME,
 } from './test-database'
 
 const QUESTION_EMBEDDING = createEmbedding(0.5)
 
 class FixedEmbeddingProvider implements EmbeddingProvider {
+  readonly modelName = TEST_EMBEDDING_MODEL_NAME
+
   async embed(texts: string[]): Promise<number[][]> {
     return texts.map(() => [...QUESTION_EMBEDDING])
   }
@@ -31,7 +34,7 @@ class FixedEmbeddingProvider implements EmbeddingProvider {
 
 class RecordingAnswerModel implements AnswerModel {
   readonly requests: AnswerModelRequest[] = []
-  response = 'La factura tiene un total de 100 [documento: doc, página: 1].'
+  response = 'La factura tiene un total de 100 [1].'
 
   async answer(request: AnswerModelRequest): Promise<string> {
     this.requests.push(request)
@@ -72,11 +75,14 @@ describe.skipIf(!integrationEnabled)('askQuestion contra Postgres', () => {
   }
 
   async function seedDocument(sessionId: SessionId): Promise<DocumentRecord> {
-    const document = createDocumentRecord({ status: 'ready' })
+    const document = createDocumentRecord({
+      status: 'ready',
+      displayName: 'comprobante_MKW-03252.pdf',
+    })
     await documents.save(sessionId, document)
     await chunks.saveMany(sessionId, document.id, [
       createChunkInput(0, 'contenido idéntico', createEmbedding(0.5), 1),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
 
     return document
   }
@@ -97,9 +103,14 @@ describe.skipIf(!integrationEnabled)('askQuestion contra Postgres', () => {
     )
 
     expect(result.citations).toEqual([
-      { documentId: documentA.id.toString(), page: 1 },
+      {
+        index: 1,
+        documentId: documentA.id.toString(),
+        displayName: 'comprobante_MKW-03252.pdf',
+        page: 1,
+      },
     ])
-    expect(model.requests[0]?.userPrompt).toContain(documentA.id.toString())
+    expect(model.requests[0]?.userPrompt).toContain('[1]\ncontenido idéntico')
     expect(model.requests[0]?.userPrompt).not.toContain(documentB.id.toString())
   })
 
@@ -120,6 +131,10 @@ describe.skipIf(!integrationEnabled)('askQuestion contra Postgres', () => {
     )
 
     expect(result.answer).toBe(model.response)
+    expect(result.citations[0]).toMatchObject({
+      displayName: 'comprobante_MKW-03252.pdf',
+      page: 1,
+    })
     expect(count.rows[0]?.count).toBeGreaterThan(0)
   })
 })

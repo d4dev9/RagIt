@@ -4,3 +4,10 @@ export class InvalidQuestionError extends Error {
     this.name = 'InvalidQuestionError'
   }
 }
+
+export class EmbeddingModelMismatchError extends Error {
+  constructor() {
+    super('El modelo de embeddings cambió. Ejecuta pnpm reindex antes de preguntar.')
+    this.name = 'EmbeddingModelMismatchError'
+  }
+}

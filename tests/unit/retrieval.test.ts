@@ -28,6 +28,7 @@ import { SessionId as SessionIdValue } from '../../src/domain/sessions/session-i
 const EMBEDDING = Array.from({ length: 768 }, () => 0.5)
 
 class FakeEmbeddingProvider implements EmbeddingProvider {
+  readonly modelName = 'test-embedding-model'
   received: readonly string[] = []
   returnEmpty = false
 
@@ -46,6 +47,7 @@ class FakeChunkRepository implements ChunkRepository {
   matches: readonly ChunkMatch[] = []
   receivedSession?: SessionId
   receivedLimit = 0
+  receivedEmbeddingModel = ''
 
   async saveMany(): Promise<void> {}
 
@@ -53,13 +55,21 @@ class FakeChunkRepository implements ChunkRepository {
     return []
   }
 
+  async listForReindex(): Promise<readonly []> {
+    return []
+  }
+
+  async updateEmbedding(): Promise<void> {}
+
   async searchBySession(
     sessionId: SessionId,
     _embedding: readonly number[],
-    limit: number
+    limit: number,
+    embeddingModel: string
   ): Promise<readonly ChunkMatch[]> {
     this.receivedSession = sessionId
     this.receivedLimit = limit
+    this.receivedEmbeddingModel = embeddingModel
 
     return this.matches
   }
@@ -85,15 +95,18 @@ function createMatch(
   page: number,
   content: string,
   distance: number,
-  index = 0
+  index = 0,
+  displayName = 'documento.pdf'
 ): ChunkMatch {
   return {
     id: ChunkId.create(randomUUID()),
     documentId,
+    displayName,
     page,
     index,
     content,
     embedding: EMBEDDING,
+    embeddingModel: 'test-embedding-model',
     createdAt: new Date(),
     distance,
   }
@@ -104,17 +117,18 @@ function newSessionId(): SessionId {
 }
 
 describe('askQuestion (F-06)', () => {
-  it('busca los 5 fragmentos de la sesión y devuelve citas sin duplicados', async () => {
+  it('asigna marcadores a fragmentos numerados de la sesión', async () => {
     const documentA = DocumentId.create(randomUUID())
     const documentB = DocumentId.create(randomUUID())
     const sessionId = newSessionId()
     const chunks = new FakeChunkRepository()
     const provider = new FakeEmbeddingProvider()
     const model = new FakeAnswerModel()
+    model.response = 'La respuesta se apoya en [1] y [3].'
     chunks.matches = [
-      createMatch(documentA, 1, 'contenido A', 0.1, 0),
+      createMatch(documentA, 1, 'contenido A', 0.1, 0, 'primero.pdf'),
       createMatch(documentA, 1, 'contenido A bis', 0.2, 1),
-      createMatch(documentB, 3, 'contenido B', 0.3, 0),
+      createMatch(documentB, 3, 'contenido B', 0.3, 0, 'segundo.pdf'),
     ]
 
     const result = await askQuestion(
@@ -128,13 +142,99 @@ describe('askQuestion (F-06)', () => {
     expect(provider.received).toEqual(['¿qué dice el documento?'])
     expect(chunks.receivedSession?.equals(sessionId)).toBe(true)
     expect(chunks.receivedLimit).toBe(5)
-    expect(result.answer).toBe('Respuesta basada en el contexto.')
+    expect(chunks.receivedEmbeddingModel).toBe(provider.modelName)
+    expect(result.answer).toBe('La respuesta se apoya en [1] y [3].')
     expect(result.citations).toEqual([
-      { documentId: documentA.toString(), page: 1 },
-      { documentId: documentB.toString(), page: 3 },
+      {
+        index: 1,
+        documentId: documentA.toString(),
+        displayName: 'primero.pdf',
+        page: 1,
+      },
+      {
+        index: 3,
+        documentId: documentB.toString(),
+        displayName: 'segundo.pdf',
+        page: 3,
+      },
     ])
     expect(model.requests).toHaveLength(1)
     expect(model.requests[0]?.systemPrompt).toBe(SYSTEM_PROMPT)
+    expect(model.requests[0]?.userPrompt).toContain('[1]\ncontenido A')
+    expect(model.requests[0]?.userPrompt).not.toContain(documentA.toString())
+  })
+
+  it('descarta marcadores que no corresponden a fragmentos recuperados', async () => {
+    const documentId = DocumentId.create(randomUUID())
+    const chunks = new FakeChunkRepository()
+    const provider = new FakeEmbeddingProvider()
+    const model = new FakeAnswerModel()
+    chunks.matches = [
+      createMatch(documentId, 4, 'contenido', 0.1, 0, 'recibo.pdf'),
+    ]
+    model.response = 'Total [1], fuente desconocida [8].'
+
+    const result = await askQuestion(
+      newSessionId(),
+      '¿cuál es el total?',
+      chunks,
+      provider,
+      model
+    )
+
+    expect(result.answer).toBe('Total [1], fuente desconocida.')
+    expect(result.citations).toEqual([
+      {
+        index: 1,
+        documentId: documentId.toString(),
+        displayName: 'recibo.pdf',
+        page: 4,
+      },
+    ])
+  })
+
+  it('devuelve una lista vacía si la respuesta no cita fuentes', async () => {
+    const chunks = new FakeChunkRepository()
+    const provider = new FakeEmbeddingProvider()
+    const model = new FakeAnswerModel()
+    chunks.matches = [
+      createMatch(DocumentId.create(randomUUID()), 1, 'contenido', 0.1),
+    ]
+
+    const result = await askQuestion(
+      newSessionId(),
+      'pregunta',
+      chunks,
+      provider,
+      model
+    )
+
+    expect(result.answer).toBe('Respuesta basada en el contexto.')
+    expect(result.citations).toEqual([])
+  })
+
+  it('elimina identificadores UUID y marcadores de documento del texto final', async () => {
+    const documentId = DocumentId.create(randomUUID())
+    const chunks = new FakeChunkRepository()
+    const provider = new FakeEmbeddingProvider()
+    const model = new FakeAnswerModel()
+    chunks.matches = [
+      createMatch(documentId, 1, 'contenido', 0.1, 0, 'factura.pdf'),
+    ]
+    model.response = `Total [1], ID ${documentId.toString()} [documento: ${documentId.toString()}, página: 1].`
+
+    const result = await askQuestion(
+      newSessionId(),
+      'pregunta',
+      chunks,
+      provider,
+      model
+    )
+
+    expect(result.answer).toBe('Total [1], ID.')
+    expect(result.answer).not.toMatch(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i)
+    expect(result.answer).not.toContain('[documento:')
+    expect(result.citations).toHaveLength(1)
   })
 
   it('rechaza una respuesta de embeddings vacía', async () => {

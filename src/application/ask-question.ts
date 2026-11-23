@@ -4,8 +4,8 @@ import {
   MAX_CONTEXT_CHUNKS,
   normalizeQuestion,
   NO_INFORMATION_ANSWER,
+  resolveAnswer,
   selectRelevantChunks,
-  toCitations,
 } from '../domain/retrieval/retrieval'
 import type { Citation, RetrievedChunk } from '../domain/retrieval/retrieval'
 import { buildQuestionPrompt } from '../domain/retrieval/prompt'
@@ -25,6 +25,7 @@ export interface AskQuestionResult {
 function toRetrievedChunk(match: ChunkMatch): RetrievedChunk {
   return {
     documentId: match.documentId.toString(),
+    displayName: match.displayName,
     page: match.page,
     chunkIndex: match.index,
     content: match.content,
@@ -52,7 +53,8 @@ export async function askQuestion(
   const matches = await chunkRepository.searchBySession(
     sessionId,
     questionEmbedding,
-    MAX_CONTEXT_CHUNKS
+    MAX_CONTEXT_CHUNKS,
+    embeddingProvider.modelName
   )
   const chunks = selectRelevantChunks(matches.map(toRetrievedChunk))
 
@@ -62,10 +64,13 @@ export async function askQuestion(
 
   const prompt = buildQuestionPrompt(normalizedQuestion, chunks)
   const answer = (await answerModel.answer(prompt)).trim()
-  const finalAnswer = answer.length > 0 ? answer : NO_INFORMATION_ANSWER
+  const resolved = resolveAnswer(
+    answer.length > 0 ? answer : NO_INFORMATION_ANSWER,
+    chunks
+  )
 
   return {
-    answer: finalAnswer,
-    citations: toCitations(chunks),
+    answer: resolved.answer,
+    citations: resolved.citations,
   }
 }
