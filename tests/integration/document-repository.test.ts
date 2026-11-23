@@ -13,6 +13,7 @@ import {
   createSession,
   integrationEnabled,
   migrateDatabase,
+  TEST_EMBEDDING_MODEL_NAME,
 } from './test-database'
 
 describe.skipIf(!integrationEnabled)('PostgresDocumentRepository', () => {
@@ -119,7 +120,7 @@ describe.skipIf(!integrationEnabled)('PostgresDocumentRepository', () => {
     const document = await saveDocument(sessionId)
     await chunks.saveMany(sessionId, document.id, [
       createChunkInput(0, 'contenido', createEmbedding(0.1)),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
 
     expect(await documents.delete(sessionId, document.id)).toBe(true)
     expect(await chunks.listByDocument(sessionId, document.id)).toEqual([])

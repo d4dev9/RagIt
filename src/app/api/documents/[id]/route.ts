@@ -11,6 +11,8 @@ import {
   PdfNotFoundError,
 } from '../../../../infrastructure/storage/pdf-file-store'
 import { getOrCreateApiSession } from '../../../../lib/api-session'
+import { apiError } from '../../../../lib/api-response'
+import { createRequestId, logger } from '../../../../lib/logger'
 
 interface DocumentRouteContext {
   readonly params: Promise<{ readonly id: string }>
@@ -20,6 +22,8 @@ export async function GET(
   _request: Request,
   context: DocumentRouteContext
 ): Promise<Response> {
+  const requestId = createRequestId()
+
   try {
     const { id } = await context.params
     const documentId = DocumentId.create(id)
@@ -33,11 +37,11 @@ export async function GET(
     )
 
     if (!document) {
-      return Response.json({ error: 'Documento no encontrado' }, { status: 404 })
+      return apiError('Documento no encontrado', 'DOCUMENT_NOT_FOUND', requestId, 404)
     }
 
     if (!document.storagePath) {
-      return Response.json({ error: 'Documento no disponible' }, { status: 404 })
+      return apiError('Documento no disponible', 'DOCUMENT_UNAVAILABLE', requestId, 404)
     }
 
     const pdf = await createPdfFileStoreFromEnv().read(document.storagePath)
@@ -51,19 +55,16 @@ export async function GET(
     })
   } catch (error) {
     if (error instanceof InvalidDocumentIdError) {
-      return Response.json({ error: 'Documento no encontrado' }, { status: 404 })
+      return apiError('Documento no encontrado', 'DOCUMENT_NOT_FOUND', requestId, 404)
     }
 
     if (error instanceof PdfNotFoundError) {
-      return Response.json({ error: 'Documento no encontrado' }, { status: 404 })
+      return apiError('Documento no encontrado', 'DOCUMENT_NOT_FOUND', requestId, 404)
     }
 
-    console.error('Error interno al abrir un documento')
+    logger.error({ event: 'document_file_open_failed', requestId, error })
 
-    return Response.json(
-      { error: 'No se pudo abrir el documento' },
-      { status: 500 }
-    )
+    return apiError('No se pudo abrir el documento', 'INTERNAL_ERROR', requestId, 500)
   }
 }
 
@@ -71,6 +72,8 @@ export async function DELETE(
   _request: Request,
   context: DocumentRouteContext
 ): Promise<Response> {
+  const requestId = createRequestId()
+
   try {
     const { id } = await context.params
     const pool = getPostgresPool()
@@ -85,20 +88,17 @@ export async function DELETE(
     })
 
     if (!removed) {
-      return Response.json({ error: 'Documento no encontrado' }, { status: 404 })
+      return apiError('Documento no encontrado', 'DOCUMENT_NOT_FOUND', requestId, 404)
     }
 
     return new Response(null, { status: 204 })
   } catch (error) {
     if (error instanceof InvalidDocumentIdError) {
-      return Response.json({ error: 'Documento no encontrado' }, { status: 404 })
+      return apiError('Documento no encontrado', 'DOCUMENT_NOT_FOUND', requestId, 404)
     }
 
-    console.error('Error interno al eliminar un documento')
+    logger.error({ event: 'document_delete_failed', requestId, error })
 
-    return Response.json(
-      { error: 'No se pudo eliminar el documento' },
-      { status: 500 }
-    )
+    return apiError('No se pudo eliminar el documento', 'INTERNAL_ERROR', requestId, 500)
   }
 }

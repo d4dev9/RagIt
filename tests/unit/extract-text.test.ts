@@ -130,6 +130,15 @@ describe('extractText (F-03)', () => {
     expect(result.segments).toEqual(['hola mundo'])
   })
 
+  it('elimina y cuenta caracteres nulos del texto extraído', () => {
+    const result = extractText(
+      buildPdf(['(comprobante\\000 legible) Tj'])
+    )
+
+    expect(result.segments).toEqual(['comprobante legible'])
+    expect(result.nulCharactersRemoved).toBe(1)
+  })
+
   it('extrae texto de streams con FlateDecode', () => {
     const result = extractText(buildPdf(['(contenido comprimido) Tj'], 'flate'))
 

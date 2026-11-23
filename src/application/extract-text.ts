@@ -10,6 +10,7 @@ export interface ExtractedPage {
 export interface ExtractedText {
   readonly segments: readonly string[]
   readonly pages: readonly ExtractedPage[]
+  readonly nulCharactersRemoved: number
 }
 
 interface PdfObject {
@@ -757,11 +758,23 @@ export function extractText(pdfBytes: Buffer): ExtractedText {
       }
     }
 
+    let nulCharactersRemoved = 0
+    const cleanedPages = pages.map((page) => ({
+      ...page,
+      segments: page.segments.map((segment) => {
+        const cleaned = segment.split('\u0000').join('')
+        nulCharactersRemoved += segment.length - cleaned.length
+
+        return cleaned
+      }),
+    }))
+
     return {
-      segments: pages.flatMap((page) => page.segments),
-      pages,
+      segments: cleanedPages.flatMap((page) => page.segments),
+      pages: cleanedPages,
+      nulCharactersRemoved,
     }
   } catch {
-    return { segments: [], pages: [] }
+    return { segments: [], pages: [], nulCharactersRemoved: 0 }
   }
 }

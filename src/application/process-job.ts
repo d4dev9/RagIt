@@ -3,8 +3,22 @@ import { ChunkId } from '../domain/documents/chunk-id'
 import { DocumentId } from '../domain/documents/document-id'
 import { DocumentState } from '../domain/documents/document-status'
 import type { DocumentStatus } from '../domain/documents/document-status'
-import { MAX_DOCUMENT_PAGES } from '../domain/documents/document-limits'
+import {
+  MAX_DOCUMENT_PAGES,
+} from '../domain/documents/document-limits'
+import {
+  InvalidEmbeddingError,
+  InvalidPdfSignatureError,
+  PageLimitExceededError,
+  PdfTooLargeError,
+} from '../domain/documents/document-errors'
 import { assertEmbedding } from '../domain/documents/embedding'
+import {
+  MIN_PRINTABLE_CHARACTER_RATIO,
+  printableCharacterRatio,
+} from '../domain/documents/text-readability'
+import type { IngestionFailureCode } from '../domain/documents/ingestion-failure'
+import { assertPdfSignature } from '../domain/documents/pdf-signature'
 import { splitTextIntoChunks } from '../domain/documents/text-chunking'
 import { SessionId } from '../domain/sessions/session-id'
 import type { DocumentRepository } from '../ports/documents/document-repository'
@@ -21,9 +35,11 @@ import type {
 import type { PdfFileStore } from '../ports/pdf-file-store'
 import { extractText } from './extract-text'
 import {
+  IngestionFailureError,
   IngestDocumentNotFoundError,
   InvalidIngestJobPayloadError,
 } from './ingest-errors'
+import { logger } from '../lib/logger'
 
 export interface ProcessJobDependencies {
   readonly documentRepository: DocumentRepository
@@ -58,6 +74,31 @@ export async function processJob(
   job: Job,
   deps: ProcessJobDependencies
 ): Promise<ProcessJobResult> {
+  try {
+    return await processJobContents(job, deps)
+  } catch (error) {
+    const code = getFailureCode(error)
+    const technicalError =
+      error instanceof IngestionFailureError && error.originalError !== undefined
+        ? error.originalError
+        : error
+
+    logger.error({
+      event: 'ingest_job_failed',
+      requestId: job.id,
+      error: technicalError,
+    })
+
+    await markJobFailed(job, deps, code)
+
+    return { documentStatus: 'failed', chunksSaved: 0 }
+  }
+}
+
+async function processJobContents(
+  job: Job,
+  deps: ProcessJobDependencies
+): Promise<ProcessJobResult> {
   const payload = readJobPayload(job)
   const sessionId = SessionId.create(payload.sessionId)
   const documentId = DocumentId.create(payload.documentId)
@@ -88,21 +129,44 @@ export async function processJob(
   }
 
   let pdfBytes: Buffer
-
   try {
     pdfBytes = await deps.pdfFileStore.read(payload.storagePath)
-  } catch {
-    return failJob(job, payload, deps, 'pdf_no_disponible')
+  } catch (error) {
+    throw new IngestionFailureError('STORAGE_FAILED', error)
   }
 
   if (pdfBytes.byteLength !== payload.pdfByteLength) {
-    return failJob(job, payload, deps, 'tamano_no_coincide')
+    throw new IngestionFailureError('STORAGE_FAILED')
   }
 
-  const { pages } = extractText(pdfBytes)
+  try {
+    assertPdfSignature(pdfBytes)
+  } catch (error) {
+    if (error instanceof InvalidPdfSignatureError) {
+      throw new IngestionFailureError('NOT_PDF', error)
+    }
+
+    throw error
+  }
+
+  const extracted = extractText(pdfBytes)
+
+  if (extracted.nulCharactersRemoved > 0) {
+    logger.info({
+      event: 'ingest_null_characters_removed',
+      requestId: job.id,
+      nulCharactersRemoved: extracted.nulCharactersRemoved,
+    })
+  }
+
+  const { pages } = extracted
 
   if (pages.length > MAX_DOCUMENT_PAGES) {
-    return failJob(job, payload, deps, 'limite_paginas_excedido')
+    throw new IngestionFailureError('TOO_LARGE', new PageLimitExceededError())
+  }
+
+  if (pages.length === 0) {
+    throw new IngestionFailureError('UNREADABLE_PDF')
   }
 
   const textChunks = pages.flatMap((page) => {
@@ -119,8 +183,16 @@ export async function processJob(
     })
   })
 
-  if (textChunks.length === 0) {
-    return failJob(job, payload, deps, 'sin_texto_extraible')
+  const extractedContent = pages
+    .flatMap((page) => page.segments)
+    .join('\n')
+
+  if (
+    textChunks.length === 0 ||
+    printableCharacterRatio(extractedContent) <
+      MIN_PRINTABLE_CHARACTER_RATIO
+  ) {
+    throw new IngestionFailureError('NO_EXTRACTABLE_TEXT')
   }
 
   let embeddings: number[][]
@@ -129,22 +201,32 @@ export async function processJob(
     embeddings = await deps.embeddingProvider.embed(
       textChunks.map((chunk) => chunk.content)
     )
-  } catch {
-    return failJob(job, payload, deps, 'proveedor_embeddings')
+  } catch (error) {
+    throw new IngestionFailureError('EMBEDDING_PROVIDER_FAILED', error)
   }
 
   if (embeddings.length !== textChunks.length) {
-    return failJob(job, payload, deps, 'embeddings_incompletos')
+    throw new IngestionFailureError(
+      'EMBEDDING_PROVIDER_FAILED',
+      new InvalidEmbeddingError()
+    )
   }
 
   const chunks: ChunkInput[] = textChunks.map((chunk, position) => {
     const embedding = embeddings[position]
 
     if (!embedding) {
-      throw new InvalidIngestJobPayloadError('Falta un embedding para un fragmento')
+      throw new IngestionFailureError(
+        'EMBEDDING_PROVIDER_FAILED',
+        new InvalidEmbeddingError()
+      )
     }
 
-    assertEmbedding(embedding)
+    try {
+      assertEmbedding(embedding)
+    } catch (error) {
+      throw new IngestionFailureError('EMBEDDING_PROVIDER_FAILED', error)
+    }
 
     return {
       id: ChunkId.create(randomUUID()),
@@ -155,7 +237,12 @@ export async function processJob(
     }
   })
 
-  await deps.chunkRepository.saveMany(sessionId, documentId, chunks)
+  await deps.chunkRepository.saveMany(
+    sessionId,
+    documentId,
+    chunks,
+    deps.embeddingProvider.modelName
+  )
 
   await deps.documentRepository.updateStatus(
     sessionId,
@@ -172,24 +259,54 @@ export async function processJob(
   return { documentStatus: 'ready', chunksSaved: chunks.length }
 }
 
-async function failJob(
+function getFailureCode(error: unknown): IngestionFailureCode {
+  if (error instanceof IngestionFailureError) {
+    return error.code
+  }
+
+  if (error instanceof InvalidPdfSignatureError) {
+    return 'NOT_PDF'
+  }
+
+  if (error instanceof PdfTooLargeError || error instanceof PageLimitExceededError) {
+    return 'TOO_LARGE'
+  }
+
+  return 'UNKNOWN'
+}
+
+async function markJobFailed(
   job: Job,
-  payload: IngestDocumentJobPayload,
   deps: ProcessJobDependencies,
-  reason: string
-): Promise<ProcessJobResult> {
-  const sessionId = SessionId.create(payload.sessionId)
-  const documentId = DocumentId.create(payload.documentId)
+  code: IngestionFailureCode = 'UNKNOWN'
+): Promise<void> {
+  await deps.jobQueue.markFailed(job.id, code)
 
-  await deps.documentRepository.updateStatus(
-    sessionId,
-    documentId,
-    'failed',
-    new Date()
-  )
-  await deps.jobQueue.markFailed(job.id, reason)
+  let payload: IngestDocumentJobPayload
 
-  return { documentStatus: 'failed', chunksSaved: 0 }
+  try {
+    payload = readJobPayload(job)
+  } catch {
+    return
+  }
+
+  try {
+    const sessionId = SessionId.create(payload.sessionId)
+    const documentId = DocumentId.create(payload.documentId)
+
+    await deps.documentRepository.updateStatus(
+      sessionId,
+      documentId,
+      'failed',
+      new Date()
+    )
+  } catch (error) {
+    logger.error({
+      event: 'ingest_document_failure_status_update_failed',
+      requestId: job.id,
+      error,
+    })
+  }
 }
 
 export async function processNextJob(
@@ -204,36 +321,22 @@ export async function processNextJob(
   try {
     return await processJob(job, deps)
   } catch (error) {
-    await recoverUnexpectedFailure(job, deps)
-    throw error
+    logger.error({
+      event: 'ingest_job_failure_recording_failed',
+      requestId: job.id,
+      error,
+    })
+
+    try {
+      await markJobFailed(job, deps, 'UNKNOWN')
+    } catch (markError) {
+      logger.error({
+        event: 'ingest_job_failure_recording_retry_failed',
+        requestId: job.id,
+        error: markError,
+      })
+    }
+
+    return { documentStatus: 'failed', chunksSaved: 0 }
   }
-}
-
-async function recoverUnexpectedFailure(
-  job: Job,
-  deps: ProcessJobDependencies
-): Promise<void> {
-  await deps.jobQueue.markFailed(job.id, 'error_interno')
-
-  let payload: IngestDocumentJobPayload
-
-  try {
-    payload = readJobPayload(job)
-  } catch {
-    return
-  }
-
-  const sessionId = SessionId.create(payload.sessionId)
-  const documentId = DocumentId.create(payload.documentId)
-  const document = await deps.documentRepository.findById(sessionId, documentId)
-
-  if (document && !DocumentState.from(document.status).isTerminal()) {
-    await deps.documentRepository.updateStatus(
-      sessionId,
-      documentId,
-      'failed',
-      new Date()
-    )
-  }
-
 }

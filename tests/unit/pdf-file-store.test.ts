@@ -8,7 +8,6 @@ import {
   createPdfFileStoreFromEnv,
   InvalidStoragePathError,
   LocalPdfFileStore,
-  MissingPdfStorageDirError,
   PdfNotFoundError,
 } from '../../src/infrastructure/storage/pdf-file-store'
 
@@ -80,7 +79,7 @@ describe('LocalPdfFileStore (F-08)', () => {
 })
 
 describe('createPdfFileStoreFromEnv', () => {
-  it('exige PDF_STORAGE_DIR', () => {
-    expect(() => createPdfFileStoreFromEnv({})).toThrow(MissingPdfStorageDirError)
+  it('usa .data/pdfs cuando PDF_STORAGE_DIR no está definida', () => {
+    expect(createPdfFileStoreFromEnv({})).toBeInstanceOf(LocalPdfFileStore)
   })
 })

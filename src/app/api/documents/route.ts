@@ -5,32 +5,44 @@ import {
   PdfTooLargeError,
 } from '../../../domain/documents/document-errors'
 import { MAX_PDF_SIZE_BYTES } from '../../../domain/documents/document-limits'
+import { ingestionFailureMessage } from '../../../domain/documents/ingestion-failure'
 import { uploadDocument } from '../../../application/upload-document'
 import { getPostgresPool } from '../../../infrastructure/database/postgres-pool'
+import { MissingDatabaseUrlError } from '../../../infrastructure/database/postgres-pool'
 import { PostgresDocumentRepository } from '../../../infrastructure/database/postgres-document-repository'
-import { PostgresJobQueue } from '../../../infrastructure/database/postgres-job-queue'
+import {
+  InvalidJobQueueConfigError,
+  PostgresJobQueue,
+} from '../../../infrastructure/database/postgres-job-queue'
 import { PostgresSessionRepository } from '../../../infrastructure/database/postgres-session-repository'
 import { createPdfFileStoreFromEnv } from '../../../infrastructure/storage/pdf-file-store'
 import { getOrCreateApiSession } from '../../../lib/api-session'
+import {
+  apiError,
+  serviceUnavailableResponse,
+} from '../../../lib/api-response'
+import { createRequestId, logger } from '../../../lib/logger'
 
 const MAX_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 export const runtime = 'nodejs'
 
 export async function POST(request: Request): Promise<Response> {
+  const requestId = createRequestId()
+
   try {
     const pool = getPostgresPool()
-    const sessionRepository = new PostgresSessionRepository(pool)
-    const sessionId = await getOrCreateApiSession(sessionRepository)
     const contentLength = Number(request.headers.get('content-length'))
 
     if (
       Number.isFinite(contentLength) &&
       contentLength > MAX_PDF_SIZE_BYTES + MAX_MULTIPART_OVERHEAD_BYTES
     ) {
-      return Response.json(
-        { error: 'El archivo no es válido' },
-        { status: 413 }
+      return apiError(
+        ingestionFailureMessage('TOO_LARGE'),
+        'TOO_LARGE',
+        requestId,
+        413
       )
     }
 
@@ -40,7 +52,7 @@ export async function POST(request: Request): Promise<Response> {
       formData = await request.formData()
     } catch {
       return Response.json(
-        { error: 'La solicitud no es válida' },
+        { error: 'La solicitud no es válida', code: 'INVALID_REQUEST', requestId },
         { status: 400 }
       )
     }
@@ -53,19 +65,29 @@ export async function POST(request: Request): Promise<Response> {
       entries[0] !== 'file' ||
       !(file instanceof File)
     ) {
-      return Response.json(
-        { error: 'La solicitud no es válida' },
-        { status: 400 }
-      )
+      return apiError('La solicitud no es válida', 'INVALID_REQUEST', requestId, 400)
     }
 
     if (file.size > MAX_PDF_SIZE_BYTES) {
-      return Response.json(
-        { error: 'El archivo no es válido' },
-        { status: 413 }
+      return apiError(
+        ingestionFailureMessage('TOO_LARGE'),
+        'TOO_LARGE',
+        requestId,
+        413
       )
     }
 
+    if (file.type !== 'application/pdf') {
+      return apiError(
+        ingestionFailureMessage('NOT_PDF'),
+        'NOT_PDF',
+        requestId,
+        400
+      )
+    }
+
+    const sessionRepository = new PostgresSessionRepository(pool)
+    const sessionId = await getOrCreateApiSession(sessionRepository)
     const result = await uploadDocument(
       sessionId,
       Buffer.from(await file.arrayBuffer()),
@@ -82,37 +104,50 @@ export async function POST(request: Request): Promise<Response> {
         documentId: result.documentId,
         displayName: result.displayName,
         status: result.documentStatus,
+        requestId,
       },
       { status: 202 }
     )
   } catch (error) {
+    if (error instanceof MissingDatabaseUrlError) {
+      logger.error({ event: 'database_configuration_missing', requestId, error })
+
+      return serviceUnavailableResponse(requestId)
+    }
+
+    if (error instanceof InvalidJobQueueConfigError) {
+      logger.error({ event: 'job_queue_configuration_invalid', requestId, error })
+
+      return serviceUnavailableResponse(requestId)
+    }
+
     if (
       error instanceof InvalidPdfSignatureError ||
       error instanceof PdfTooLargeError
     ) {
-      return Response.json(
-        { error: 'El archivo no es válido' },
-        { status: error instanceof PdfTooLargeError ? 413 : 400 }
+      return apiError(
+        ingestionFailureMessage(
+          error instanceof PdfTooLargeError ? 'TOO_LARGE' : 'NOT_PDF'
+        ),
+        error instanceof PdfTooLargeError ? 'TOO_LARGE' : 'NOT_PDF',
+        requestId,
+        error instanceof PdfTooLargeError ? 413 : 400
       )
     }
 
     if (error instanceof DocumentQuotaExceededError) {
-      return Response.json(
-        { error: 'Se alcanzó el límite de documentos' },
-        { status: 409 }
-      )
+      return apiError('Se alcanzó el límite de documentos', 'DOCUMENT_QUOTA', requestId, 409)
     }
 
-    console.error('Error interno al subir un documento')
+    logger.error({ event: 'document_upload_failed', requestId, error })
 
-    return Response.json(
-      { error: 'No se pudo procesar el documento' },
-      { status: 500 }
-    )
+    return apiError('No se pudo procesar el documento', 'INTERNAL_ERROR', requestId, 500)
   }
 }
 
 export async function GET(): Promise<Response> {
+  const requestId = createRequestId()
+
   try {
     const pool = getPostgresPool()
     const sessionRepository = new PostgresSessionRepository(pool)
@@ -130,14 +165,24 @@ export async function GET(): Promise<Response> {
         sizeBytes: document.sizeBytes,
         createdAt: document.createdAt.toISOString(),
         updatedAt: document.updatedAt.toISOString(),
+        ...(document.status === 'failed'
+          ? {
+              errorMessage: ingestionFailureMessage(
+                document.failureCode ?? 'UNKNOWN'
+              ),
+            }
+          : {}),
       })),
+      requestId,
     })
-  } catch {
-    console.error('Error interno al listar documentos')
+  } catch (error) {
+    logger.error({ event: 'document_list_failed', requestId, error })
 
-    return Response.json(
-      { error: 'No se pudieron consultar los documentos' },
-      { status: 500 }
+    return apiError(
+      'No se pudieron consultar los documentos',
+      'INTERNAL_ERROR',
+      requestId,
+      500
     )
   }
 }

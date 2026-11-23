@@ -21,13 +21,6 @@ export class PdfNotFoundError extends Error {
   }
 }
 
-export class MissingPdfStorageDirError extends Error {
-  constructor() {
-    super('La variable de entorno PDF_STORAGE_DIR no está definida')
-    this.name = 'MissingPdfStorageDirError'
-  }
-}
-
 function isErrnoCode(error: unknown, code: string): boolean {
   return error instanceof Error && 'code' in error && error.code === code
 }
@@ -106,11 +99,7 @@ export class LocalPdfFileStore implements PdfFileStore {
 export function createPdfFileStoreFromEnv(
   env: Readonly<Record<string, string | undefined>> = process.env
 ): LocalPdfFileStore {
-  const configured = env.PDF_STORAGE_DIR
-
-  if (!configured) {
-    throw new MissingPdfStorageDirError()
-  }
+  const configured = env.PDF_STORAGE_DIR ?? '.data/pdfs'
 
   return new LocalPdfFileStore(resolve(process.cwd(), configured))
 }

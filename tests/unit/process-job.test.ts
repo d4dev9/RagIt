@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { SessionId } from '../../src/domain/sessions/session-id'
 import { DocumentId } from '../../src/domain/documents/document-id'
-import { IngestDocumentNotFoundError } from '../../src/application/ingest-errors'
 import {
   processJob,
   processNextJob,
@@ -103,7 +102,7 @@ describe('processJob (F-03, F-04, F-08)', () => {
     expect(s.documents.statusOf(s.documentId.toString())).toBe('failed')
     expect(s.chunks.rows).toHaveLength(0)
     expect(s.files.files.size).toBe(1)
-    expect(s.queue.jobs.get(s.job.id)?.error).toBe('sin_texto_extraible')
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('NO_EXTRACTABLE_TEXT')
   })
 
   it('marca como failed si el proveedor de embeddings falla', async () => {
@@ -116,7 +115,7 @@ describe('processJob (F-03, F-04, F-08)', () => {
     expect(result.documentStatus).toBe('failed')
     expect(s.documents.statusOf(s.documentId.toString())).toBe('failed')
     expect(s.files.files.size).toBe(1)
-    expect(s.queue.jobs.get(s.job.id)?.error).toBe('proveedor_embeddings')
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('EMBEDDING_PROVIDER_FAILED')
   })
 
   it('rechaza embeddings incompletos sin guardar fragmentos', async () => {
@@ -128,7 +127,7 @@ describe('processJob (F-03, F-04, F-08)', () => {
 
     expect(result.documentStatus).toBe('failed')
     expect(s.chunks.rows).toHaveLength(0)
-    expect(s.queue.jobs.get(s.job.id)?.error).toBe('embeddings_incompletos')
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('EMBEDDING_PROVIDER_FAILED')
   })
 
   it('falla si el tamaño leído no coincide con el registrado', async () => {
@@ -139,7 +138,17 @@ describe('processJob (F-03, F-04, F-08)', () => {
     const result = await processJob(s.job, s.deps)
 
     expect(result.documentStatus).toBe('failed')
-    expect(s.queue.jobs.get(s.job.id)?.error).toBe('tamano_no_coincide')
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('STORAGE_FAILED')
+  })
+
+  it('marca como ilegible un PDF con firma pero sin estructura reconocible', async () => {
+    const pdf = Buffer.from('%PDF-1.4\ncontenido truncado')
+    const s = await scenario(pdf)
+
+    const result = await processJob(s.job, s.deps)
+
+    expect(result.documentStatus).toBe('failed')
+    expect(s.queue.jobs.get(s.job.id)?.error).toBe('UNREADABLE_PDF')
   })
 
   it('no reprocesa un documento que ya está en estado terminal', async () => {
@@ -163,9 +172,10 @@ describe('processJob (F-03, F-04, F-08)', () => {
       payload: { ...s.job.payload, documentId: randomUUID() },
     }
 
-    await expect(processJob(orphan, s.deps)).rejects.toBeInstanceOf(
-      IngestDocumentNotFoundError
-    )
+    const result = await processJob(orphan, s.deps)
+
+    expect(result.documentStatus).toBe('failed')
+    expect(s.queue.jobs.get(orphan.id)?.error).toBe('UNKNOWN')
   })
 })
 
@@ -176,7 +186,7 @@ describe('processNextJob', () => {
     expect(await processNextJob(s.deps)).toBeNull()
   })
 
-  it('cierra el trabajo como failed si ocurre un error inesperado', async () => {
+  it('marca como failed un trabajo con payload inválido', async () => {
     const s = await scenario(fixture('01_texto_factura.pdf'))
     const orphan: Job = {
       ...s.job,
@@ -191,13 +201,12 @@ describe('processNextJob', () => {
       pdfByteLength: 1,
     })
 
-    await expect(
-      processNextJob({ ...s.deps, jobQueue: queue })
-    ).rejects.toBeInstanceOf(IngestDocumentNotFoundError)
+    const result = await processNextJob({ ...s.deps, jobQueue: queue })
 
     const [claimed] = [...queue.jobs.values()]
 
+    expect(result?.documentStatus).toBe('failed')
     expect(claimed?.status).toBe('failed')
-    expect(claimed?.error).toBe('error_interno')
+    expect(claimed?.error).toBe('UNKNOWN')
   })
 })

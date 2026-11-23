@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { POST as uploadRoute } from '../../src/app/api/documents/route'
 import { GET, DELETE } from '../../src/app/api/documents/[id]/route'
+import { MAX_PDF_SIZE_BYTES } from '../../src/domain/documents/document-limits'
 import { DocumentId } from '../../src/domain/documents/document-id'
 import { PostgresChunkRepository } from '../../src/infrastructure/database/postgres-chunk-repository'
 import { PostgresDocumentRepository } from '../../src/infrastructure/database/postgres-document-repository'
@@ -20,6 +22,7 @@ import {
   createSession,
   integrationEnabled,
   migrateDatabase,
+  TEST_EMBEDDING_MODEL_NAME,
 } from './test-database'
 
 const cookieState = vi.hoisted(() => {
@@ -110,10 +113,10 @@ describe.skipIf(!integrationEnabled)('rutas de archivo de documentos', () => {
     await documents.save(secondSession.id, secondDocument)
     await chunks.saveMany(firstSession.id, firstDocument.id, [
       createChunkInput(0, 'fragmento de A', createEmbedding(0.1)),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
     await chunks.saveMany(secondSession.id, secondDocument.id, [
       createChunkInput(0, 'fragmento de B', createEmbedding(0.1)),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
     jobA = (
       await jobs.submitIngestJob({
       documentId: firstDocument.id.toString(),
@@ -155,6 +158,47 @@ describe.skipIf(!integrationEnabled)('rutas de archivo de documentos', () => {
     } else {
       process.env.PDF_STORAGE_DIR = originalStorageDirectory
     }
+  })
+
+  it('rechaza tipos de archivo distintos de PDF con 400 antes de crear sesión', async () => {
+    const formData = new FormData()
+    formData.set('file', new File(['contenido'], 'nota.txt', { type: 'text/plain' }))
+    const response = await uploadRoute(
+      new Request('https://localhost/api/documents', {
+        method: 'POST',
+        body: formData,
+      })
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({
+      error: 'Solo se admiten archivos PDF.',
+      code: 'NOT_PDF',
+    })
+  })
+
+  it('rechaza archivos mayores de 5 MB con 413 antes de leer el archivo', async () => {
+    const formData = new FormData()
+    formData.set(
+      'file',
+      new File(
+        [new Uint8Array(MAX_PDF_SIZE_BYTES + 1)],
+        'grande.pdf',
+        { type: 'application/pdf' }
+      )
+    )
+    const response = await uploadRoute(
+      new Request('https://localhost/api/documents', {
+        method: 'POST',
+        body: formData,
+      })
+    )
+
+    expect(response.status).toBe(413)
+    expect(await response.json()).toMatchObject({
+      error: 'El archivo supera el límite de 5 MB.',
+      code: 'TOO_LARGE',
+    })
   })
 
   it('aisla el visor por sesión y elimina en orden sin afectar otra sesión', async () => {

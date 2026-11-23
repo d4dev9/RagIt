@@ -1,5 +1,6 @@
 import type { DocumentId } from '../domain/documents/document-id'
 import type { SessionId } from '../domain/sessions/session-id'
+import type { IngestionFailureCode } from '../domain/documents/ingestion-failure'
 
 export const INGEST_DOCUMENT_JOB_TYPE = 'ingest_document'
 
@@ -30,7 +31,7 @@ export interface JobQueue {
   getJob(id: string): Promise<Job | null>
   claimNextJob(): Promise<Job | null>
   markReady(id: string, result: Record<string, unknown>): Promise<void>
-  markFailed(id: string, error: string): Promise<void>
+  markFailed(id: string, error: IngestionFailureCode): Promise<void>
   deleteByDocument(sessionId: SessionId, documentId: DocumentId): Promise<void>
   deleteBySession(sessionId: SessionId): Promise<void>
 }

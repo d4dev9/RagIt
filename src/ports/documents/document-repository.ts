@@ -1,6 +1,7 @@
 import type { DocumentId } from '../../domain/documents/document-id'
 import type { DocumentStatus } from '../../domain/documents/document-status'
 import type { SessionId } from '../../domain/sessions/session-id'
+import type { IngestionFailureCode } from '../../domain/documents/ingestion-failure'
 
 export interface DocumentRecord {
   readonly id: DocumentId
@@ -11,6 +12,7 @@ export interface DocumentRecord {
   readonly pageCount: number
   readonly createdAt: Date
   readonly updatedAt: Date
+  readonly failureCode?: IngestionFailureCode
 }
 
 export interface DocumentRepository {

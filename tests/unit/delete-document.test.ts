@@ -30,7 +30,7 @@ describe('deleteDocument (F-08)', () => {
         content: 'contenido',
         embedding: Array.from({ length: 768 }, () => 0.1),
       },
-    ])
+    ], 'test-embedding-model')
     const job = await jobs.submitIngestJob({
       documentId: record.id.toString(),
       sessionId: sessionId.toString(),

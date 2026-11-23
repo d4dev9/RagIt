@@ -1,6 +1,10 @@
 import type { Pool, PoolClient } from 'pg'
 import { DocumentId } from '../../domain/documents/document-id'
 import { InvalidDocumentCountError } from '../../domain/documents/document-errors'
+import {
+  isIngestionFailureCode,
+  type IngestionFailureCode,
+} from '../../domain/documents/ingestion-failure'
 import { DocumentState } from '../../domain/documents/document-status'
 import type { DocumentStatus } from '../../domain/documents/document-status'
 import type { SessionId } from '../../domain/sessions/session-id'
@@ -18,9 +22,12 @@ type DocumentRow = {
   page_count: number
   created_at: Date
   updated_at: Date
+  failure_code?: string | null
 }
 
 function toRecord(row: DocumentRow): DocumentRecord {
+  const failureCode = row.failure_code
+
   return {
     id: DocumentId.create(row.id),
     status: DocumentState.from(row.status).status,
@@ -30,6 +37,13 @@ function toRecord(row: DocumentRow): DocumentRecord {
     pageCount: row.page_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(failureCode === null || failureCode === undefined
+      ? {}
+      : {
+          failureCode: isIngestionFailureCode(failureCode)
+            ? failureCode
+            : ('UNKNOWN' satisfies IngestionFailureCode),
+        }),
   }
 }
 
@@ -134,9 +148,28 @@ export class PostgresDocumentRepository implements DocumentRepository {
   ): Promise<DocumentRecord | null> {
     const result = await this.pool.query<DocumentRow>(
       `
-        SELECT id, status, storage_path, display_name, size_bytes, page_count, created_at, updated_at
+        SELECT
+          documents.id,
+          documents.status,
+          documents.storage_path,
+          documents.display_name,
+          documents.size_bytes,
+          documents.page_count,
+          documents.created_at,
+          documents.updated_at,
+          failed_job.error AS failure_code
         FROM documents
-        WHERE id = $1 AND session_id = $2
+        LEFT JOIN LATERAL (
+          SELECT jobs.error
+          FROM jobs
+          WHERE jobs.type = 'ingest_document'
+            AND jobs.status = 'failed'
+            AND jobs.payload->>'sessionId' = documents.session_id::text
+            AND jobs.payload->>'documentId' = documents.id::text
+          ORDER BY jobs.completed_at DESC NULLS LAST, jobs.created_at DESC
+          LIMIT 1
+        ) AS failed_job ON TRUE
+        WHERE documents.id = $1 AND documents.session_id = $2
       `,
       [documentId.toString(), sessionId.toString()]
     )
@@ -150,10 +183,29 @@ export class PostgresDocumentRepository implements DocumentRepository {
   ): Promise<readonly DocumentRecord[]> {
     const result = await this.pool.query<DocumentRow>(
       `
-        SELECT id, status, storage_path, display_name, size_bytes, page_count, created_at, updated_at
+        SELECT
+          documents.id,
+          documents.status,
+          documents.storage_path,
+          documents.display_name,
+          documents.size_bytes,
+          documents.page_count,
+          documents.created_at,
+          documents.updated_at,
+          failed_job.error AS failure_code
         FROM documents
-        WHERE session_id = $1
-        ORDER BY created_at ASC, id ASC
+        LEFT JOIN LATERAL (
+          SELECT jobs.error
+          FROM jobs
+          WHERE jobs.type = 'ingest_document'
+            AND jobs.status = 'failed'
+            AND jobs.payload->>'sessionId' = documents.session_id::text
+            AND jobs.payload->>'documentId' = documents.id::text
+          ORDER BY jobs.completed_at DESC NULLS LAST, jobs.created_at DESC
+          LIMIT 1
+        ) AS failed_job ON TRUE
+        WHERE documents.session_id = $1
+        ORDER BY documents.created_at ASC, documents.id ASC
       `,
       [sessionId.toString()]
     )

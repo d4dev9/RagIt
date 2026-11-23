@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
-import { Pool } from 'pg'
+import { Client, Pool } from 'pg'
 import { ChunkId } from '../../src/domain/documents/chunk-id'
 import { DocumentId } from '../../src/domain/documents/document-id'
 import type { DocumentStatus } from '../../src/domain/documents/document-status'
@@ -13,6 +13,7 @@ import type { ChunkInput } from '../../src/ports/documents/chunk-repository'
 
 const APP_DATABASE_URL = process.env.TEST_DATABASE_URL
 const MIGRATION_DATABASE_URL = process.env.TEST_MIGRATION_DATABASE_URL
+export const TEST_EMBEDDING_MODEL_NAME = 'test-embedding-model'
 
 export const integrationEnabled = Boolean(
   APP_DATABASE_URL && MIGRATION_DATABASE_URL
@@ -38,10 +39,25 @@ export function createAdminPool(): Pool {
 }
 
 export async function migrateDatabase(): Promise<void> {
-  await runMigrations({
-    connectionString: requireUrl(MIGRATION_DATABASE_URL),
-    directory: resolve('migrations'),
-  })
+  const connectionString = requireUrl(MIGRATION_DATABASE_URL)
+  const client = new Client({ connectionString })
+
+  try {
+    await client.connect()
+  } catch {
+    throw new Error(
+      'La base de datos no responde en DATABASE_URL: ejecuta docker compose up -d'
+    )
+  }
+
+  try {
+    await runMigrations({
+      connectionString,
+      directory: resolve('migrations'),
+    })
+  } finally {
+    await client.end()
+  }
 }
 
 export function createSession(now: Date = new Date()): Session {

@@ -13,6 +13,7 @@ import {
   createSession,
   integrationEnabled,
   migrateDatabase,
+  TEST_EMBEDDING_MODEL_NAME,
 } from './test-database'
 
 describe.skipIf(!integrationEnabled)('Aislamiento entre sesiones', () => {
@@ -52,7 +53,7 @@ describe.skipIf(!integrationEnabled)('Aislamiento entre sesiones', () => {
     await chunks.saveMany(sessionId, document.id, [
       createChunkInput(0, 'contenido idéntico', createEmbedding(0.4)),
       createChunkInput(1, 'segundo contenido idéntico', createEmbedding(0.6)),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
 
     return document
   }
@@ -83,7 +84,7 @@ describe.skipIf(!integrationEnabled)('Aislamiento entre sesiones', () => {
     await expect(
       chunks.saveMany(sessionA, documentB.id, [
         createChunkInput(2, 'intruso', createEmbedding(0.5), 2),
-      ])
+      ], TEST_EMBEDDING_MODEL_NAME)
     ).rejects.toMatchObject({ code: '23503' })
   })
 
@@ -95,7 +96,8 @@ describe.skipIf(!integrationEnabled)('Aislamiento entre sesiones', () => {
     const found = await chunks.searchBySession(
       sessionA,
       createEmbedding(0.4),
-      10
+      10,
+      TEST_EMBEDDING_MODEL_NAME
     )
 
     expect(found).toHaveLength(2)

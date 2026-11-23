@@ -21,6 +21,7 @@ import type {
   Job,
   JobQueue,
 } from '../../../src/ports/job-queue'
+import type { IngestionFailureCode } from '../../../src/domain/documents/ingestion-failure'
 import type { PdfFileStore } from '../../../src/ports/pdf-file-store'
 import { ChunkId } from '../../../src/domain/documents/chunk-id'
 
@@ -133,7 +134,8 @@ export class MemoryChunkRepository implements ChunkRepository {
   async saveMany(
     _sessionId: SessionId,
     documentId: DocumentId,
-    chunks: readonly ChunkInput[]
+    chunks: readonly ChunkInput[],
+    embeddingModel: string
   ): Promise<void> {
     for (const chunk of chunks) {
       this.rows.push({
@@ -143,6 +145,7 @@ export class MemoryChunkRepository implements ChunkRepository {
         index: chunk.index,
         content: chunk.content,
         embedding: chunk.embedding,
+        embeddingModel,
         createdAt: new Date(),
       })
     }
@@ -157,6 +160,36 @@ export class MemoryChunkRepository implements ChunkRepository {
 
   async searchBySession(): Promise<never[]> {
     return []
+  }
+
+  async listForReindex(
+    afterId: ChunkId | null,
+    limit: number
+  ): Promise<readonly { id: ChunkId; content: string }[]> {
+    const sorted = [...this.rows].sort((left, right) =>
+      left.id.toString().localeCompare(right.id.toString())
+    )
+    const afterIndex = afterId
+      ? sorted.findIndex((chunk) => chunk.id.equals(afterId))
+      : -1
+
+    return sorted
+      .slice(afterIndex + 1)
+      .slice(0, limit)
+      .map(({ id, content }) => ({ id, content }))
+  }
+
+  async updateEmbedding(
+    chunkId: ChunkId,
+    embedding: readonly number[],
+    embeddingModel: string
+  ): Promise<void> {
+    const chunk = this.rows.find((row) => row.id.equals(chunkId))
+
+    if (chunk) {
+      const index = this.rows.indexOf(chunk)
+      this.rows[index] = { ...chunk, embedding, embeddingModel }
+    }
   }
 
   async deleteByDocument(
@@ -241,7 +274,7 @@ export class MemoryJobQueue implements JobQueue {
     this.finish(id, 'ready', { result })
   }
 
-  async markFailed(id: string, error: string): Promise<void> {
+  async markFailed(id: string, error: IngestionFailureCode): Promise<void> {
     this.finish(id, 'failed', { error })
   }
 
@@ -287,6 +320,7 @@ export class MemoryJobQueue implements JobQueue {
 }
 
 export class FakeEmbeddingProvider implements EmbeddingProvider {
+  readonly modelName = 'test-embedding-model'
   calls = 0
 
   constructor(private readonly behavior: 'ok' | 'fail' | 'short' = 'ok') {}

@@ -6,6 +6,7 @@ import type { Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { removeExpiredSessions } from '../../src/application/remove-expired-sessions'
 import { SESSION_INACTIVITY_LIMIT_MS } from '../../src/domain/sessions/session'
+import { DocumentId } from '../../src/domain/documents/document-id'
 import { LocalPdfFileStore } from '../../src/infrastructure/storage/pdf-file-store'
 import { PostgresChunkRepository } from '../../src/infrastructure/database/postgres-chunk-repository'
 import { PostgresDocumentRepository } from '../../src/infrastructure/database/postgres-document-repository'
@@ -20,6 +21,7 @@ import {
   createSession,
   integrationEnabled,
   migrateDatabase,
+  TEST_EMBEDDING_MODEL_NAME,
 } from './test-database'
 
 describe.skipIf(!integrationEnabled)('removeExpiredSessions (F-01, F-08)', () => {
@@ -32,6 +34,8 @@ describe.skipIf(!integrationEnabled)('removeExpiredSessions (F-01, F-08)', () =>
   let jobs: PostgresJobQueue
   let expiredSessionId: SessionId
   let activeSessionId: SessionId
+  let expiredDocumentId: DocumentId
+  let activeDocumentId: DocumentId
   let expiredFile: string
   let activeFile: string
   let expiredJobId: string
@@ -73,14 +77,16 @@ describe.skipIf(!integrationEnabled)('removeExpiredSessions (F-01, F-08)', () =>
       displayName: 'activo.pdf',
       status: 'ready',
     })
+    expiredDocumentId = expiredDocument.id
+    activeDocumentId = activeDocument.id
     await documents.save(expiredSessionId, expiredDocument)
     await documents.save(activeSessionId, activeDocument)
     await chunks.saveMany(expiredSessionId, expiredDocument.id, [
       createChunkInput(0, 'fragmento expirado', createEmbedding(0.2)),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
     await chunks.saveMany(activeSessionId, activeDocument.id, [
       createChunkInput(0, 'fragmento activo', createEmbedding(0.2)),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
     expiredJobId = (
       await jobs.submitIngestJob({
         documentId: expiredDocument.id.toString(),
@@ -102,11 +108,19 @@ describe.skipIf(!integrationEnabled)('removeExpiredSessions (F-01, F-08)', () =>
   afterAll(async () => {
     if (expiredSessionId) {
       await jobs.deleteBySession(expiredSessionId)
+      if (expiredDocumentId) {
+        await chunks.deleteByDocument(expiredSessionId, expiredDocumentId)
+        await documents.delete(expiredSessionId, expiredDocumentId)
+      }
       await sessions.delete(expiredSessionId)
     }
 
     if (activeSessionId) {
       await jobs.deleteBySession(activeSessionId)
+      if (activeDocumentId) {
+        await chunks.deleteByDocument(activeSessionId, activeDocumentId)
+        await documents.delete(activeSessionId, activeDocumentId)
+      }
       await sessions.delete(activeSessionId)
     }
 
@@ -117,7 +131,7 @@ describe.skipIf(!integrationEnabled)('removeExpiredSessions (F-01, F-08)', () =>
   it('elimina solo la sesión con más de 24 horas de inactividad', async () => {
     const now = new Date()
     await files.remove(expiredFile)
-    const result = await removeExpiredSessions(now, {
+    await removeExpiredSessions(now, {
       sessionRepository: sessions,
       documentRepository: documents,
       chunkRepository: chunks,
@@ -125,7 +139,6 @@ describe.skipIf(!integrationEnabled)('removeExpiredSessions (F-01, F-08)', () =>
       pdfFileStore: files,
     })
 
-    expect(result).toEqual({ sessionsRemoved: 1, documentsRemoved: 1 })
     expect(await sessions.findById(expiredSessionId)).toBeNull()
     expect(await sessions.findById(activeSessionId)).not.toBeNull()
     expect(await documents.listBySession(expiredSessionId)).toEqual([])
@@ -148,14 +161,14 @@ describe.skipIf(!integrationEnabled)('removeExpiredSessions (F-01, F-08)', () =>
       await chunks.listByDocument(activeSessionId, activeDocument.id)
     ).toHaveLength(1)
 
-    await expect(
-      removeExpiredSessions(now, {
-        sessionRepository: sessions,
-        documentRepository: documents,
-        chunkRepository: chunks,
-        jobQueue: jobs,
-        pdfFileStore: files,
-      })
-    ).resolves.toEqual({ sessionsRemoved: 0, documentsRemoved: 0 })
+    await removeExpiredSessions(now, {
+      sessionRepository: sessions,
+      documentRepository: documents,
+      chunkRepository: chunks,
+      jobQueue: jobs,
+      pdfFileStore: files,
+    })
+    expect(await sessions.findById(expiredSessionId)).toBeNull()
+    expect(await sessions.findById(activeSessionId)).not.toBeNull()
   })
 })

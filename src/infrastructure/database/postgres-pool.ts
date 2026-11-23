@@ -1,6 +1,8 @@
 import { Pool } from 'pg'
 
 export class MissingDatabaseUrlError extends Error {
+  readonly variable = 'DATABASE_URL'
+
   constructor() {
     super('La variable de entorno DATABASE_URL no está definida')
     this.name = 'MissingDatabaseUrlError'
