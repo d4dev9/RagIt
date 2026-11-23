@@ -17,6 +17,7 @@ import {
   createSession,
   integrationEnabled,
   migrateDatabase,
+  TEST_EMBEDDING_MODEL_NAME,
 } from './test-database'
 
 describe.skipIf(!integrationEnabled)('PostgresChunkRepository', () => {
@@ -72,7 +73,7 @@ describe.skipIf(!integrationEnabled)('PostgresChunkRepository', () => {
     const embedding = createEmbedding(0.2)
     const second = createChunkInput(1, 'segundo', embedding, 2)
     const first = createChunkInput(0, 'primero', embedding, 1)
-    await chunks.saveMany(sessionId, documentId, [second, first])
+    await chunks.saveMany(sessionId, documentId, [second, first], TEST_EMBEDDING_MODEL_NAME)
     const stored = await chunks.listByDocument(sessionId, documentId)
 
     expect(stored.map((chunk) => chunk.content)).toEqual(['primero', 'segundo'])
@@ -83,8 +84,13 @@ describe.skipIf(!integrationEnabled)('PostgresChunkRepository', () => {
     const { sessionId, documentId } = await newDocument()
     const near = createChunkInput(0, 'cercano', createEmbedding(1))
     const far = createChunkInput(1, 'lejano', createEmbedding(-1))
-    await chunks.saveMany(sessionId, documentId, [near, far])
-    const found = await chunks.searchBySession(sessionId, createEmbedding(1), 1)
+    await chunks.saveMany(sessionId, documentId, [near, far], TEST_EMBEDDING_MODEL_NAME)
+    const found = await chunks.searchBySession(
+      sessionId,
+      createEmbedding(1),
+      1,
+      TEST_EMBEDDING_MODEL_NAME
+    )
 
     expect(found).toHaveLength(1)
     expect(found[0]?.content).toBe('cercano')
@@ -99,12 +105,13 @@ describe.skipIf(!integrationEnabled)('PostgresChunkRepository', () => {
     await documents.save(session.id, legacyDocument)
     await chunks.saveMany(session.id, legacyDocument.id, [
       createChunkInput(0, 'fragmento heredado sin archivo', createEmbedding(1)),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
 
     const found = await chunks.searchBySession(
       session.id,
       createEmbedding(1),
-      5
+      5,
+      TEST_EMBEDDING_MODEL_NAME
     )
 
     expect(found).toEqual([])
@@ -114,7 +121,7 @@ describe.skipIf(!integrationEnabled)('PostgresChunkRepository', () => {
     const { sessionId, documentId } = await newDocument()
     await chunks.saveMany(sessionId, documentId, [
       createChunkInput(0, 'contenido', createEmbedding(0.3)),
-    ])
+    ], TEST_EMBEDDING_MODEL_NAME)
 
     expect(await chunks.deleteByDocument(sessionId, documentId)).toBe(1)
     expect(await chunks.listByDocument(sessionId, documentId)).toEqual([])
@@ -124,7 +131,12 @@ describe.skipIf(!integrationEnabled)('PostgresChunkRepository', () => {
     const { sessionId } = await newDocument()
 
     await expect(
-      chunks.searchBySession(sessionId, createEmbedding(0.1), 0)
+      chunks.searchBySession(
+        sessionId,
+        createEmbedding(0.1),
+        0,
+        TEST_EMBEDDING_MODEL_NAME
+      )
     ).rejects.toThrow(InvalidChunkLimitError)
   })
 
@@ -134,7 +146,7 @@ describe.skipIf(!integrationEnabled)('PostgresChunkRepository', () => {
     await expect(
       chunks.saveMany(sessionId, documentId, [
         createChunkInput(0, 'contenido', [0.1, 0.2]),
-      ])
+      ], TEST_EMBEDDING_MODEL_NAME)
     ).rejects.toThrow(InvalidEmbeddingError)
   })
 })

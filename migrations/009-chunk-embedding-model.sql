@@ -1,0 +1,2 @@
+ALTER TABLE chunks
+  ADD COLUMN embedding_model text;

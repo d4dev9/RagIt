@@ -17,10 +17,17 @@ export interface ChunkRecord {
   readonly index: number
   readonly content: string
   readonly embedding: readonly number[]
+  readonly embeddingModel: string | null
   readonly createdAt: Date
 }
 
+export interface ReindexChunk {
+  readonly id: ChunkId
+  readonly content: string
+}
+
 export interface ChunkMatch extends ChunkRecord {
+  readonly displayName: string
   readonly distance: number
 }
 
@@ -28,7 +35,8 @@ export interface ChunkRepository {
   saveMany(
     sessionId: SessionId,
     documentId: DocumentId,
-    chunks: readonly ChunkInput[]
+    chunks: readonly ChunkInput[],
+    embeddingModel: string
   ): Promise<void>
   listByDocument(
     sessionId: SessionId,
@@ -37,8 +45,19 @@ export interface ChunkRepository {
   searchBySession(
     sessionId: SessionId,
     embedding: readonly number[],
-    limit: number
+    limit: number,
+    embeddingModel: string
   ): Promise<readonly ChunkMatch[]>
+  listForReindex(
+    afterId: ChunkId | null,
+    limit: number,
+    sessionId?: SessionId
+  ): Promise<readonly ReindexChunk[]>
+  updateEmbedding(
+    chunkId: ChunkId,
+    embedding: readonly number[],
+    embeddingModel: string
+  ): Promise<void>
   deleteByDocument(
     sessionId: SessionId,
     documentId: DocumentId

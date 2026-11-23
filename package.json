@@ -12,6 +12,7 @@
     "verify": "pnpm lint && pnpm check && pnpm test && pnpm build",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "worker:ingest": "node --env-file-if-exists=.env --import tsx scripts/ingest-worker.ts",
+    "reindex": "node --env-file-if-exists=.env --import tsx scripts/reindex.ts",
     "cleanup:expired": "node --env-file-if-exists=.env --import tsx scripts/cleanup-expired.ts"
   },
   "keywords": [],
