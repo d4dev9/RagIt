@@ -292,6 +292,7 @@ button {
 
 .doc-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 12px 0;
@@ -334,6 +335,14 @@ button {
   font-size: 12px;
   color: var(--faint);
   flex-shrink: 0;
+}
+
+.doc-item .doc-error {
+  flex-basis: 100%;
+  margin-left: 24px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .empty {
@@ -432,6 +441,51 @@ button {
   font-size: 14px;
 }
 
+.waiting-message {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.typing-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 10px;
+}
+
+.typing-indicator span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: typing-pulse 1s linear infinite;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 160ms;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 320ms;
+}
+
+@keyframes typing-pulse {
+  0%,
+  60%,
+  100% {
+    opacity: 0.35;
+  }
+
+  30% {
+    opacity: 1;
+  }
+}
+
 .msg-user p,
 .msg-bot p {
   margin: 0;
@@ -447,21 +501,77 @@ button {
 }
 
 .cite {
-  font-family: var(--font-mono), ui-monospace, monospace;
-  font-size: 12px;
-  padding: 2px 8px;
+  position: relative;
+  display: inline-flex;
+  vertical-align: baseline;
+  align-items: center;
+  gap: 5px;
+  max-width: min(240px, 100%);
+  height: 22px;
+  margin: 0 2px;
+  padding: 0 7px;
   border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
+  border-radius: 999px;
+  background: var(--surface);
   color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
   transition:
     color var(--transition),
     border-color var(--transition);
 }
 
+.cite svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  stroke-width: 1.5;
+}
+
+.cite-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cite:hover {
   color: var(--fg);
   border-color: var(--border-hover);
+}
+
+.cite:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cite-tooltip {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translate(-50%, 2px);
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-alt);
+  color: var(--fg);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--transition),
+    transform var(--transition),
+    visibility var(--transition);
+}
+
+.cite:hover .cite-tooltip,
+.cite:focus-visible .cite-tooltip {
+  transform: translate(-50%, 0);
+  opacity: 1;
+  visibility: visible;
 }
 
 .chat-empty {
@@ -559,5 +669,10 @@ button {
   *::after {
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+
+  .typing-indicator span {
+    animation: none;
+    opacity: 1;
   }
 }

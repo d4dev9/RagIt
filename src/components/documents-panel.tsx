@@ -47,15 +47,24 @@ export function DocumentsPanel({
         }
 
         if (file.size > MAX_FILE_SIZE) {
-          setError('No se pudo subir el documento.')
+          setError('El archivo supera el límite de 5 MB.')
+          continue
+        }
+
+        if (file.type !== 'application/pdf') {
+          setError('Solo se admiten archivos PDF.')
           continue
         }
 
         try {
           await onUpload(file)
           uploaded += 1
-        } catch {
-          setError('No se pudo subir el documento.')
+        } catch (uploadError) {
+          setError(
+            uploadError instanceof Error
+              ? uploadError.message
+              : 'No se pudo subir el documento.'
+          )
         }
       }
     } finally {
@@ -128,6 +137,11 @@ export function DocumentsPanel({
               >
                 {document.displayName}
               </button>
+              {document.status === 'failed' && document.errorMessage && (
+                <span className="doc-error" role="status">
+                  {document.errorMessage}
+                </span>
+              )}
               {!document.available && (
                 <span className="size">No disponible</span>
               )}

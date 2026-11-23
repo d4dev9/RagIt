@@ -12,6 +12,8 @@ import type {
   WorkspaceMessage,
 } from './workspace-state'
 import {
+  hasReadyDocument,
+  getChatStatusMessage,
   initialWorkspaceState,
   workspaceReducer,
 } from './workspace-state'
@@ -40,6 +42,8 @@ function isDocument(value: unknown): value is WorkspaceDocument {
     typeof value.documentId === 'string' &&
     typeof value.displayName === 'string' &&
     typeof value.available === 'boolean' &&
+    (value.errorMessage === undefined ||
+      typeof value.errorMessage === 'string') &&
     (value.status === 'pending' ||
       value.status === 'processing' ||
       value.status === 'ready' ||
@@ -53,27 +57,63 @@ function isDocument(value: unknown): value is WorkspaceDocument {
 function isCitation(value: unknown): value is WorkspaceCitation {
   return (
     isRecord(value) &&
+    typeof value.index === 'number' &&
+    Number.isInteger(value.index) &&
+    value.index > 0 &&
     typeof value.documentId === 'string' &&
+    typeof value.displayName === 'string' &&
     typeof value.page === 'number' &&
     Number.isInteger(value.page) &&
     value.page > 0
   )
 }
 
+function logClientFailure(code: string, requestId: string): void {
+  console.error({ code, requestId })
+}
+
+async function throwResponseFailure(response: Response): Promise<never> {
+  let body: unknown
+
+  try {
+    body = await response.json()
+  } catch {
+    body = null
+  }
+
+  const error =
+    isRecord(body) && typeof body.error === 'string'
+      ? body.error
+      : GENERIC_ERROR
+  const code =
+    isRecord(body) && typeof body.code === 'string'
+      ? body.code
+      : 'REQUEST_FAILED'
+  const requestId =
+    isRecord(body) && typeof body.requestId === 'string'
+      ? body.requestId
+      : 'unavailable'
+
+  logClientFailure(code, requestId)
+  throw new Error(error)
+}
+
 async function readDocumentList(response: Response): Promise<DocumentListResponse> {
   if (!response.ok) {
-    throw new Error(GENERIC_ERROR)
+    return throwResponseFailure(response)
   }
 
   const body: unknown = await response.json()
 
   if (!isRecord(body) || !Array.isArray(body.documents)) {
+    logClientFailure('INVALID_API_RESPONSE', 'unavailable')
     throw new Error(GENERIC_ERROR)
   }
 
   const documents: unknown[] = body.documents
 
   if (!documents.every(isDocument)) {
+    logClientFailure('INVALID_API_RESPONSE', 'unavailable')
     throw new Error(GENERIC_ERROR)
   }
 
@@ -90,7 +130,7 @@ async function readDocumentList(response: Response): Promise<DocumentListRespons
 
 async function readAskResponse(response: Response): Promise<AskResponse> {
   if (!response.ok) {
-    throw new Error(GENERIC_ERROR)
+    return throwResponseFailure(response)
   }
 
   const body: unknown = await response.json()
@@ -101,6 +141,7 @@ async function readAskResponse(response: Response): Promise<AskResponse> {
     !Array.isArray(body.citations) ||
     !body.citations.every(isCitation)
   ) {
+    logClientFailure('INVALID_API_RESPONSE', 'unavailable')
     throw new Error(GENERIC_ERROR)
   }
 
@@ -111,6 +152,7 @@ export function RagItWorkspace(): JSX.Element {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState)
   const [page, setPage] = useState(1)
   const [listError, setListError] = useState('')
+  const [sending, setSending] = useState(false)
 
   const refreshDocuments = useCallback(async (): Promise<void> => {
     try {
@@ -119,7 +161,10 @@ export function RagItWorkspace(): JSX.Element {
 
       dispatch({ type: 'documentsLoaded', documents: result.documents })
       setListError('')
-    } catch {
+    } catch (error) {
+      if (error instanceof TypeError) {
+        logClientFailure('NETWORK_ERROR', 'unavailable')
+      }
       setListError('No se pudieron consultar los documentos.')
     }
   }, [])
@@ -153,9 +198,8 @@ export function RagItWorkspace(): JSX.Element {
       ) ?? null,
     [state.activeDocumentId, state.documents]
   )
-  const chatEnabled =
-    activeDocument !== null &&
-    state.documents.some((item) => item.status === 'ready')
+  const chatEnabled = hasReadyDocument(state.documents)
+  const chatStatusMessage = getChatStatusMessage(state.documents)
 
   async function upload(file: File): Promise<void> {
     const formData = new FormData()
@@ -169,16 +213,18 @@ export function RagItWorkspace(): JSX.Element {
         body: formData,
       })
     } catch {
+      logClientFailure('NETWORK_ERROR', 'unavailable')
       throw new Error(GENERIC_ERROR)
     }
 
     if (!response.ok) {
-      throw new Error(GENERIC_ERROR)
+      return throwResponseFailure(response)
     }
 
     const body: unknown = await response.json()
 
     if (!isRecord(body) || typeof body.documentId !== 'string') {
+      logClientFailure('INVALID_API_RESPONSE', 'unavailable')
       throw new Error(GENERIC_ERROR)
     }
 
@@ -196,14 +242,17 @@ export function RagItWorkspace(): JSX.Element {
       )
 
       if (!response.ok) {
-        throw new Error(GENERIC_ERROR)
+        return await throwResponseFailure(response)
       }
 
       dispatch({
         type: 'documentRemoved',
         documentId: document.documentId,
       })
-    } catch {
+    } catch (error) {
+      if (error instanceof TypeError) {
+        logClientFailure('NETWORK_ERROR', 'unavailable')
+      }
       setListError('No se pudo eliminar el documento.')
     }
   }
@@ -211,6 +260,7 @@ export function RagItWorkspace(): JSX.Element {
   async function send(question: string): Promise<void> {
     const userMessage: WorkspaceMessage = { role: 'user', text: question }
     dispatch({ type: 'messageAdded', message: userMessage })
+    setSending(true)
 
     try {
       const response = await fetch('/api/ask', {
@@ -226,15 +276,20 @@ export function RagItWorkspace(): JSX.Element {
       }
 
       dispatch({ type: 'messageAdded', message: assistantMessage })
-    } catch {
+    } catch (error) {
+      if (error instanceof TypeError) {
+        logClientFailure('NETWORK_ERROR', 'unavailable')
+      }
       dispatch({
         type: 'messageAdded',
         message: {
           role: 'assistant',
-          text: GENERIC_ERROR,
+          text: error instanceof Error ? error.message : GENERIC_ERROR,
           citations: [],
         },
       })
+    } finally {
+      setSending(false)
     }
   }
 
@@ -282,6 +337,8 @@ export function RagItWorkspace(): JSX.Element {
         <ChatPanel
           messages={state.messages}
           enabled={chatEnabled}
+          sending={sending}
+          statusMessage={chatStatusMessage}
           onSend={send}
           onCitation={selectCitation}
         />

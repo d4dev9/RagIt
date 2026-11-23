@@ -5,13 +5,16 @@ export interface WorkspaceDocument {
   readonly displayName: string
   readonly available: boolean
   readonly status: 'pending' | 'processing' | 'ready' | 'failed'
+  readonly errorMessage?: string
   readonly sizeBytes: number
   readonly createdAt: string
   readonly updatedAt: string
 }
 
 export interface WorkspaceCitation {
+  readonly index: number
   readonly documentId: string
+  readonly displayName: string
   readonly page: number
 }
 
@@ -43,6 +46,20 @@ export const initialWorkspaceState: WorkspaceState = {
   activeDocumentId: null,
   theme: 'dark',
   messages: [],
+}
+
+export function hasReadyDocument(
+  documents: readonly WorkspaceDocument[]
+): boolean {
+  return documents.some((document) => document.status === 'ready')
+}
+
+export function getChatStatusMessage(
+  documents: readonly WorkspaceDocument[]
+): string | undefined {
+  return documents.find(
+    (document) => document.status === 'failed' && document.errorMessage
+  )?.errorMessage
 }
 
 export function workspaceReducer(

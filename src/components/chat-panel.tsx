@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { FormEvent, JSX } from 'react'
-import { ArrowIcon } from './workspace-icons'
+import type { FormEvent, JSX, ReactNode } from 'react'
+import { ArrowIcon, FileIcon } from './workspace-icons'
 import type {
   WorkspaceCitation,
   WorkspaceMessage,
@@ -11,18 +11,117 @@ import type {
 interface ChatPanelProps {
   readonly messages: readonly WorkspaceMessage[]
   readonly enabled: boolean
+  readonly sending: boolean
+  readonly statusMessage?: string
   readonly onSend: (question: string) => Promise<void>
   readonly onCitation: (citation: WorkspaceCitation) => void
+}
+
+function citationNode(
+  index: number,
+  citations: readonly WorkspaceCitation[],
+  onCitation: (citation: WorkspaceCitation) => void
+): ReactNode {
+  const citation = citations.find((item) => item.index === index)
+
+  if (!citation) {
+    return null
+  }
+
+  return (
+    <button
+      className="cite"
+      type="button"
+      key={`citation-${citation.index}`}
+      aria-label={`${citation.displayName}, página ${citation.page}`}
+      onClick={() => onCitation(citation)}
+    >
+      <FileIcon />
+      <span className="cite-name">{citation.displayName}</span>
+      <span className="cite-tooltip" aria-hidden="true">
+        Página {citation.page}
+      </span>
+    </button>
+  )
+}
+
+function renderAnswer(
+  text: string,
+  citations: readonly WorkspaceCitation[],
+  onCitation: (citation: WorkspaceCitation) => void
+): ReactNode[] {
+  const parts = text.split(/(\*\*[^*\n]+\*\*|\[\d+\]|\n|\*+)/g)
+  const nodes: ReactNode[] = []
+
+  for (const [partIndex, part] of parts.entries()) {
+    if (!part) {
+      continue
+    }
+
+    if (part === '\n') {
+      nodes.push(<br key={`line-${partIndex}`} />)
+      continue
+    }
+
+    const marker = /^\[(\d+)\]$/.exec(part)
+
+    if (marker) {
+      const citation = citationNode(Number(marker[1]), citations, onCitation)
+
+      if (citation) {
+        nodes.push(citation)
+      }
+
+      continue
+    }
+
+    if (part.startsWith('**') && part.endsWith('**')) {
+      const content = part.slice(2, -2)
+      const inlineParts = content.split(/(\[\d+\]|\n)/g)
+
+      nodes.push(
+        <strong key={`bold-${partIndex}`}>
+          {inlineParts.map((inlinePart, inlineIndex) => {
+            if (inlinePart === '\n') {
+              return <br key={`bold-line-${inlineIndex}`} />
+            }
+
+            const inlineMarker = /^\[(\d+)\]$/.exec(inlinePart)
+
+            if (inlineMarker) {
+              return citationNode(
+                Number(inlineMarker[1]),
+                citations,
+                onCitation
+              )
+            }
+
+            return inlinePart
+          })}
+        </strong>
+      )
+      continue
+    }
+
+    if (/^\*+$/.test(part)) {
+      continue
+    }
+
+    nodes.push(part)
+  }
+
+  return nodes
 }
 
 export function ChatPanel({
   messages,
   enabled,
+  sending,
+  statusMessage,
   onSend,
   onCitation,
 }: ChatPanelProps): JSX.Element {
   const [question, setQuestion] = useState('')
-  const [sending, setSending] = useState(false)
   const chatBodyRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -42,13 +141,7 @@ export function ChatPanel({
     }
 
     setQuestion('')
-    setSending(true)
-
-    try {
-      await onSend(normalized)
-    } finally {
-      setSending(false)
-    }
+    await onSend(normalized)
   }
 
   return (
@@ -63,28 +156,29 @@ export function ChatPanel({
               className={message.role === 'user' ? 'msg-user' : 'msg-bot'}
               key={`${message.role}-${index}`}
             >
-              <p>{message.text}</p>
-              {message.role === 'assistant' &&
-                message.citations.length > 0 && (
-                  <div className="citations">
-                    {message.citations.map((citation, citationIndex) => (
-                      <button
-                        className="cite"
-                        type="button"
-                        key={`${citation.documentId}-${citation.page}-${citationIndex}`}
-                        onClick={() => onCitation(citation)}
-                      >
-                        p. {citation.page}
-                      </button>
-                    ))}
-                  </div>
-                )}
+              <p>
+                {message.role === 'assistant'
+                  ? renderAnswer(message.text, message.citations, onCitation)
+                  : message.text}
+              </p>
             </div>
           ))}
+          {sending && (
+            <div className="msg-bot waiting-message">
+              <span className="typing-indicator" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+              <span className="sr-only" aria-live="polite">
+                Preparando respuesta
+              </span>
+            </div>
+          )}
         </div>
         {messages.length === 0 && (
           <p className="chat-empty">
-            Sube un documento y escribe una pregunta sobre él.
+            {statusMessage ?? 'Sube un documento y escribe una pregunta sobre él.'}
           </p>
         )}
       </div>

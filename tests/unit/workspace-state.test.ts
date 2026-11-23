@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
+  getChatStatusMessage,
+  hasReadyDocument,
   initialWorkspaceState,
   workspaceReducer,
 } from '../../src/components/workspace-state'
@@ -19,6 +21,21 @@ function document(documentId = randomUUID()): WorkspaceDocument {
 }
 
 describe('workspaceReducer', () => {
+  it('allows chat when any session document is ready, even if another failed', () => {
+    const failed = { ...document(), status: 'failed' as const }
+
+    expect(hasReadyDocument([failed])).toBe(false)
+    expect(hasReadyDocument([failed, document()])).toBe(true)
+  })
+
+  it('surfaces the specific failed-document message in the chat status', () => {
+    const message =
+      'No pudimos leer texto de este PDF. Puede ser un escaneo, que aún no soportamos.'
+    const failed = { ...document(), status: 'failed' as const, errorMessage: message }
+
+    expect(getChatStatusMessage([failed])).toBe(message)
+  })
+
   it('selects an uploaded document and clears the selection when it is removed', () => {
     const item = document()
     const selected = workspaceReducer(initialWorkspaceState, {
